@@ -9,6 +9,7 @@ from config import INPUT_COLS, TARGET_COLS, TIME_COL, DEFAULT_FREQ
 import torch
 import os
 import glob
+import random
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 
@@ -71,14 +72,31 @@ if __name__ == "__main__":
 
     print(f"Total loaded series blocks: {len(targets_list)}")
 
-    # Split into train and test
-    split_idx = int(len(targets_list) * 0.8)
-    train_targets = targets_list[:split_idx]
-    train_covariates = covariates_list[:split_idx]
-    test_targets = targets_list[split_idx:]
-    test_covariates = covariates_list[split_idx:]
+    # Shuffle the blocks to randomize train/test datasets
+    random.seed(42)
+    combined = list(zip(targets_list, covariates_list))
+    random.shuffle(combined)
+    targets_list, covariates_list = zip(*combined)
 
-    print(f"Train blocks: {len(train_targets)}, Test blocks: {len(test_targets)}")
+    # Needs to be a list again
+    targets_list = list(targets_list)
+    covariates_list = list(covariates_list)
+
+    # Split into train, val, test (70% / 15% / 15%)
+    n_total = len(targets_list)
+    split_idx_1 = int(n_total * 0.7)
+    split_idx_2 = int(n_total * 0.85)
+
+    train_targets = targets_list[:split_idx_1]
+    train_covariates = covariates_list[:split_idx_1]
+
+    val_targets = targets_list[split_idx_1:split_idx_2]
+    val_covariates = covariates_list[split_idx_1:split_idx_2]
+
+    test_targets = targets_list[split_idx_2:]
+    test_covariates = covariates_list[split_idx_2:]
+
+    print(f"Train blocks: {len(train_targets)}, Val blocks: {len(val_targets)}, Test blocks: {len(test_targets)}")
 
     # Scale the data
     target_scaler = Scaler(global_fit=True)
@@ -86,6 +104,10 @@ if __name__ == "__main__":
 
     train_targets_scaled = target_scaler.fit_transform(train_targets)
     train_covariates_scaled = covariates_scaler.fit_transform(train_covariates)
+
+    val_targets_scaled = target_scaler.transform(val_targets)
+    val_covariates_scaled = covariates_scaler.transform(val_covariates)
+
     test_targets_scaled = target_scaler.transform(test_targets)
     test_covariates_scaled = covariates_scaler.transform(test_covariates)
 
@@ -96,6 +118,8 @@ if __name__ == "__main__":
     models = {
         "NaiveLastValue": NaiveSeasonal(K=1),
         # "BlockRNN": BlockRNNModel(
+        #     model_name="BlockRNN",
+        #     save_checkpoints=True,
         #     model="GRU",
         #     hidden_dim=64,
         #     n_rnn_layers=2,
@@ -105,10 +129,12 @@ if __name__ == "__main__":
         #     batch_size=32,
         #     optimizer_kwargs={"lr": 1e-3},
         #     lr_scheduler_cls=ReduceLROnPlateau,
-        #     lr_scheduler_kwargs={"factor": 0.5, "patience": 3},
+        #     lr_scheduler_kwargs={"factor": 0.5, "patience": 3, "monitor": "val_loss"},
         #     pl_trainer_kwargs={"logger": CSVLogger("outputs/logs", name="BlockRNN"), "log_every_n_steps": 1}
         # ),
         # "TFT": TFTModel(
+        #     model_name="TFT",
+        #     save_checkpoints=True,
         #     input_chunk_length=INPUT_CHUNK_LENGTH,
         #     output_chunk_length=OUTPUT_CHUNK_LENGTH,
         #     hidden_size=64,
@@ -120,13 +146,15 @@ if __name__ == "__main__":
         #     batch_size=32,
         #     optimizer_kwargs={"lr": 1e-3},
         #     lr_scheduler_cls=ReduceLROnPlateau,
-        #     lr_scheduler_kwargs={"factor": 0.5, "patience": 3},
+        #     lr_scheduler_kwargs={"factor": 0.5, "patience": 3, "monitor": "val_loss"},
         #     pl_trainer_kwargs={
         #         "logger": CSVLogger("outputs/logs", name="TFT"),
         #         "log_every_n_steps": 1
         #     }
         # ),
         "NLinear": NLinearModel(
+            model_name="NLinear",
+            save_checkpoints=True,
             input_chunk_length=INPUT_CHUNK_LENGTH,
             output_chunk_length=OUTPUT_CHUNK_LENGTH,
             const_init=False,
@@ -134,13 +162,15 @@ if __name__ == "__main__":
             batch_size=128,
             optimizer_kwargs={"lr": 1e-3},
             lr_scheduler_cls=ReduceLROnPlateau,
-            lr_scheduler_kwargs={"factor": 0.5, "patience": 5, "monitor": "train_loss"},
+            lr_scheduler_kwargs={"factor": 0.5, "patience": 5, "monitor": "val_loss"},
             pl_trainer_kwargs={
                 "logger": CSVLogger("outputs/logs", name="NLinear"),
                 "log_every_n_steps": 1
             }
         ),
         "DLinear": DLinearModel(
+            model_name="DLinear",
+            save_checkpoints=True,
             input_chunk_length=INPUT_CHUNK_LENGTH,
             output_chunk_length=OUTPUT_CHUNK_LENGTH,
             const_init=False,
@@ -148,13 +178,15 @@ if __name__ == "__main__":
             batch_size=128,
             optimizer_kwargs={"lr": 1e-3},
             lr_scheduler_cls=ReduceLROnPlateau,
-            lr_scheduler_kwargs={"factor": 0.5, "patience": 5, "monitor": "train_loss"},
+            lr_scheduler_kwargs={"factor": 0.5, "patience": 5, "monitor": "val_loss"},
             pl_trainer_kwargs={
                 "logger": CSVLogger("outputs/logs", name="DLinear"),
                 "log_every_n_steps": 1
             }
         ),
         "TSMixer": TSMixerModel(
+            model_name="TSMixer",
+            save_checkpoints=True,
             input_chunk_length=INPUT_CHUNK_LENGTH,
             output_chunk_length=OUTPUT_CHUNK_LENGTH,
             hidden_size=64,
@@ -165,7 +197,7 @@ if __name__ == "__main__":
             batch_size=32,
             optimizer_kwargs={"lr": 1e-3},
             lr_scheduler_cls=ReduceLROnPlateau,
-            lr_scheduler_kwargs={"factor": 0.5, "patience": 3, "monitor": "train_loss"},
+            lr_scheduler_kwargs={"factor": 0.5, "patience": 3, "monitor": "val_loss"},
             pl_trainer_kwargs={
                 "logger": CSVLogger("outputs/logs", name="TSMixer"),
                 "log_every_n_steps": 1
@@ -183,18 +215,39 @@ if __name__ == "__main__":
             # For naive, we just evaluate on each test block
             pass # No training required
         elif name in ["TFT", "NLinear", "DLinear", "XGBoost", "RandomForest", "TSMixer"]:
-            model.fit(series=train_targets_scaled, future_covariates=train_covariates_scaled)
+            model.fit(
+                series=train_targets_scaled,
+                future_covariates=train_covariates_scaled,
+                val_series=val_targets_scaled,
+                val_future_covariates=val_covariates_scaled
+            )
         elif name == "BlockRNN":
             # BlockRNN accepts covariates via the past_covariates argument
-            model.fit(series=train_targets_scaled, past_covariates=train_covariates_scaled)
+            model.fit(
+                series=train_targets_scaled,
+                past_covariates=train_covariates_scaled,
+                val_series=val_targets_scaled,
+                val_past_covariates=val_covariates_scaled
+            )
         else:
             try:
-                model.fit(series=train_targets_scaled)
+                model.fit(
+                    series=train_targets_scaled,
+                    val_series=val_targets_scaled
+                )
             except Exception as e:
                 print(f"Error training {name}: {e}")
 
         # Testing
         print(f"Testing {name}...")
+
+        if name in ["TFT", "NLinear", "DLinear", "BlockRNN", "TSMixer"]:
+            try:
+                # Load the best model from checkpoint for testing
+                model = type(model).load_from_checkpoint(model_name=name, best=True)
+                print(f"Loaded best checkpoint for {name}.")
+            except Exception as e:
+                print(f"Could not load best checkpoint for {name}: {e}")
 
         # Calculate training MAE/MSE (optional, can be very slow for large datasets)
         if name not in ["NaiveLastValue"]:
