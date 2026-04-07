@@ -1,6 +1,7 @@
 import pandas as pd
 from darts import TimeSeries
-from darts.models import TFTModel, BlockRNNModel, NaiveSeasonal, NLinearModel
+from darts.models import TFTModel, BlockRNNModel, NaiveSeasonal, NLinearModel, DLinearModel, XGBModel, RandomForest, TSMixerModel
+from darts.dataprocessing.transformers import Scaler
 from darts.metrics import mae, mse
 from pytorch_lightning.loggers import CSVLogger
 import matplotlib.pyplot as plt
@@ -8,6 +9,7 @@ from config import INPUT_COLS, TARGET_COLS, TIME_COL, DEFAULT_FREQ
 import torch
 import os
 import glob
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 
 def load_data(filepath: str):
@@ -51,10 +53,17 @@ if __name__ == "__main__":
     targets_list = []
     covariates_list = []
 
+    # Number of files to use for dataset creation (None to use all files)
+    MAX_FILES_TO_LOAD = 1
+
     data_dir = "data_preprocessed"
     all_files = glob.glob(os.path.join(data_dir, "*.csv"))
 
-    for filepath in sorted(all_files):
+    all_files = sorted(all_files)
+    if MAX_FILES_TO_LOAD is not None:
+        all_files = all_files[:MAX_FILES_TO_LOAD]
+
+    for filepath in all_files:
         t, c = load_data(filepath)
         targets_list.extend(t)
         covariates_list.extend(c)
@@ -71,32 +80,97 @@ if __name__ == "__main__":
 
     print(f"Train blocks: {len(train_targets)}, Test blocks: {len(test_targets)}")
 
-    INPUT_CHUNK_LENGTH = 360
-    OUTPUT_CHUNK_LENGTH = 180
+    # Scale the data
+    target_scaler = Scaler(global_fit=True)
+    covariates_scaler = Scaler(global_fit=True)
+
+    train_targets_scaled = target_scaler.fit_transform(train_targets)
+    train_covariates_scaled = covariates_scaler.fit_transform(train_covariates)
+    test_targets_scaled = target_scaler.transform(test_targets)
+    test_covariates_scaled = covariates_scaler.transform(test_covariates)
+
+    INPUT_CHUNK_LENGTH = 180
+    OUTPUT_CHUNK_LENGTH = 45
 
     # Models definition
     models = {
         "NaiveLastValue": NaiveSeasonal(K=1),
-        "BlockRNN": BlockRNNModel(
-            model="GRU",
-            input_chunk_length=INPUT_CHUNK_LENGTH,
-            output_chunk_length=OUTPUT_CHUNK_LENGTH,
-            n_epochs=5,
-            pl_trainer_kwargs={"logger": CSVLogger("outputs/logs", name="BlockRNN")}
-        ),
-        "TFT": TFTModel(
-            input_chunk_length=INPUT_CHUNK_LENGTH,
-            output_chunk_length=OUTPUT_CHUNK_LENGTH,
-            add_relative_index=True,
-            n_epochs=5,
-            pl_trainer_kwargs={"logger": CSVLogger("outputs/logs", name="TFT")}
-        ),
+        # "BlockRNN": BlockRNNModel(
+        #     model="GRU",
+        #     hidden_dim=64,
+        #     n_rnn_layers=2,
+        #     input_chunk_length=INPUT_CHUNK_LENGTH,
+        #     output_chunk_length=OUTPUT_CHUNK_LENGTH,
+        #     n_epochs=20,
+        #     batch_size=32,
+        #     optimizer_kwargs={"lr": 1e-3},
+        #     lr_scheduler_cls=ReduceLROnPlateau,
+        #     lr_scheduler_kwargs={"factor": 0.5, "patience": 3},
+        #     pl_trainer_kwargs={"logger": CSVLogger("outputs/logs", name="BlockRNN"), "log_every_n_steps": 1}
+        # ),
+        # "TFT": TFTModel(
+        #     input_chunk_length=INPUT_CHUNK_LENGTH,
+        #     output_chunk_length=OUTPUT_CHUNK_LENGTH,
+        #     hidden_size=64,
+        #     lstm_layers=2,
+        #     num_attention_heads=4,
+        #     dropout=0.1,
+        #     add_relative_index=True,
+        #     n_epochs=20,
+        #     batch_size=32,
+        #     optimizer_kwargs={"lr": 1e-3},
+        #     lr_scheduler_cls=ReduceLROnPlateau,
+        #     lr_scheduler_kwargs={"factor": 0.5, "patience": 3},
+        #     pl_trainer_kwargs={
+        #         "logger": CSVLogger("outputs/logs", name="TFT"),
+        #         "log_every_n_steps": 1
+        #     }
+        # ),
         "NLinear": NLinearModel(
             input_chunk_length=INPUT_CHUNK_LENGTH,
             output_chunk_length=OUTPUT_CHUNK_LENGTH,
-            n_epochs=5,
-            pl_trainer_kwargs={"logger": CSVLogger("outputs/logs", name="NLinear")}
-        )
+            const_init=False,
+            n_epochs=40,
+            batch_size=128,
+            optimizer_kwargs={"lr": 1e-3},
+            lr_scheduler_cls=ReduceLROnPlateau,
+            lr_scheduler_kwargs={"factor": 0.5, "patience": 5, "monitor": "train_loss"},
+            pl_trainer_kwargs={
+                "logger": CSVLogger("outputs/logs", name="NLinear"),
+                "log_every_n_steps": 1
+            }
+        ),
+        "DLinear": DLinearModel(
+            input_chunk_length=INPUT_CHUNK_LENGTH,
+            output_chunk_length=OUTPUT_CHUNK_LENGTH,
+            const_init=False,
+            n_epochs=40,
+            batch_size=128,
+            optimizer_kwargs={"lr": 1e-3},
+            lr_scheduler_cls=ReduceLROnPlateau,
+            lr_scheduler_kwargs={"factor": 0.5, "patience": 5, "monitor": "train_loss"},
+            pl_trainer_kwargs={
+                "logger": CSVLogger("outputs/logs", name="DLinear"),
+                "log_every_n_steps": 1
+            }
+        ),
+        "TSMixer": TSMixerModel(
+            input_chunk_length=INPUT_CHUNK_LENGTH,
+            output_chunk_length=OUTPUT_CHUNK_LENGTH,
+            hidden_size=64,
+            ff_size=64,
+            num_blocks=3,
+            dropout=0.1,
+            n_epochs=20,
+            batch_size=32,
+            optimizer_kwargs={"lr": 1e-3},
+            lr_scheduler_cls=ReduceLROnPlateau,
+            lr_scheduler_kwargs={"factor": 0.5, "patience": 3, "monitor": "train_loss"},
+            pl_trainer_kwargs={
+                "logger": CSVLogger("outputs/logs", name="TSMixer"),
+                "log_every_n_steps": 1
+            }
+        ),
     }
 
     results = []
@@ -108,42 +182,69 @@ if __name__ == "__main__":
         if name == "NaiveLastValue":
             # For naive, we just evaluate on each test block
             pass # No training required
-        elif name in ["TFT", "NLinear"]:
-            model.fit(series=train_targets, future_covariates=train_covariates)
+        elif name in ["TFT", "NLinear", "DLinear", "XGBoost", "RandomForest", "TSMixer"]:
+            model.fit(series=train_targets_scaled, future_covariates=train_covariates_scaled)
         elif name == "BlockRNN":
             # BlockRNN accepts covariates via the past_covariates argument
-            model.fit(series=train_targets, past_covariates=train_covariates)
+            model.fit(series=train_targets_scaled, past_covariates=train_covariates_scaled)
         else:
             try:
-                model.fit(series=train_targets)
+                model.fit(series=train_targets_scaled)
             except Exception as e:
                 print(f"Error training {name}: {e}")
 
         # Testing
         print(f"Testing {name}...")
+
+        # Calculate training MAE/MSE (optional, can be very slow for large datasets)
+        if name not in ["NaiveLastValue"]:
+            try:
+                # To keep it quick, we'll just evaluate on a subset or full train
+                train_preds_scaled = model.predict(n=OUTPUT_CHUNK_LENGTH, series=[t[:-OUTPUT_CHUNK_LENGTH] for t in train_targets_scaled if len(t) > INPUT_CHUNK_LENGTH + OUTPUT_CHUNK_LENGTH],
+                                            future_covariates=[c for t, c in zip(train_targets_scaled, train_covariates_scaled) if len(t) > INPUT_CHUNK_LENGTH + OUTPUT_CHUNK_LENGTH] if name in ["TFT", "NLinear", "DLinear", "XGBoost", "RandomForest", "TSMixer"] else None,
+                                            past_covariates=[c for t, c in zip(train_targets_scaled, train_covariates_scaled) if len(t) > INPUT_CHUNK_LENGTH + OUTPUT_CHUNK_LENGTH] if name == "BlockRNN" else None)
+
+                # Inverse transform the predictions back to original distribution
+                if isinstance(train_preds_scaled, list):
+                    train_preds = target_scaler.inverse_transform(train_preds_scaled)
+                else:
+                    train_preds = target_scaler.inverse_transform([train_preds_scaled])
+
+                true_train = [t[-OUTPUT_CHUNK_LENGTH:] for t in train_targets if len(t) > INPUT_CHUNK_LENGTH + OUTPUT_CHUNK_LENGTH]
+                train_mae = mae(true_train, train_preds)
+                train_mse = mse(true_train, train_preds)
+                print(f"Training metrics for {name} - MAE: {train_mae:.4f}, MSE: {train_mse:.4f}")
+            except Exception as e:
+                print(f"Could not calculate train metrics for {name}: {e}")
+
         mae_list = []
         mse_list = []
         all_preds = []
         all_trues = []
 
-        for i, (ts_target, ts_cov) in enumerate(zip(test_targets, test_covariates)):
+        for i, (ts_target, ts_cov, ts_target_raw) in enumerate(zip(test_targets_scaled, test_covariates_scaled, test_targets)):
             # Predict from the last OUTPUT_CHUNK_LENGTH steps
             # Ensure the series is long enough
             if len(ts_target) <= INPUT_CHUNK_LENGTH + OUTPUT_CHUNK_LENGTH:
                 continue
 
             y_train = ts_target[:-OUTPUT_CHUNK_LENGTH]
-            y_true = ts_target[-OUTPUT_CHUNK_LENGTH:]
 
-            if name in ["TFT", "NLinear"]:
-                pred = model.predict(n=OUTPUT_CHUNK_LENGTH, series=y_train, future_covariates=ts_cov)
+            # y_true needs to be unscaled for metric calculation later
+            y_true = ts_target_raw[-OUTPUT_CHUNK_LENGTH:]
+
+            if name in ["TFT", "NLinear", "DLinear", "XGBoost", "RandomForest", "TSMixer"]:
+                pred_scaled = model.predict(n=OUTPUT_CHUNK_LENGTH, series=y_train, future_covariates=ts_cov)
             elif name == "BlockRNN":
-                pred = model.predict(n=OUTPUT_CHUNK_LENGTH, series=y_train, past_covariates=ts_cov)
+                pred_scaled = model.predict(n=OUTPUT_CHUNK_LENGTH, series=y_train, past_covariates=ts_cov)
             elif name == "NaiveLastValue":
                 model.fit(y_train)
-                pred = model.predict(n=OUTPUT_CHUNK_LENGTH)
+                pred_scaled = model.predict(n=OUTPUT_CHUNK_LENGTH)
             else:
-                pred = model.predict(n=OUTPUT_CHUNK_LENGTH, series=y_train)
+                pred_scaled = model.predict(n=OUTPUT_CHUNK_LENGTH, series=y_train)
+
+            # Inverse scale predictions directly mapping back real boundaries
+            pred = target_scaler.inverse_transform(pred_scaled)
 
             mae_list.append(mae(y_true, pred))
             mse_list.append(mse(y_true, pred))
@@ -163,6 +264,12 @@ if __name__ == "__main__":
             avg_mse = sum(mse_list) / len(mse_list)
             print(f"Results for {name}: MAE={avg_mae:.4f}, MSE={avg_mse:.4f}")
 
+            results.append({
+                "Model": name,
+                "MAE": avg_mae,
+                "MSE": avg_mse
+            })
+
             # Save to CSV
             pd.concat(all_preds).to_csv(f"outputs/pred_{name}.csv")
             if all_trues:
@@ -173,7 +280,7 @@ if __name__ == "__main__":
     print("\nGenerating training loss chart...")
     plt.figure(figsize=(10, 6))
     for name in models.keys():
-        if name == "NaiveLastValue":
+        if name in ["NaiveLastValue", "XGBoost", "RandomForest"]:
             continue
         try:
             metrics_paths = glob.glob(f"outputs/logs/{name}/*/metrics.csv")
@@ -181,14 +288,25 @@ if __name__ == "__main__":
                 # Sort by creation time to get the latest
                 metrics_paths.sort(key=os.path.getmtime)
                 metrics_df = pd.read_csv(metrics_paths[-1])
-                if 'train_loss' in metrics_df.columns:
+
+                # Check for train_loss_epoch first (whole epoch loss)
+                if 'train_loss_epoch' in metrics_df.columns:
+                    epoch_loss = metrics_df['train_loss_epoch'].dropna()
+                    # Some loggers append NaNs for step logs, so reset index
+                    plt.plot(range(len(epoch_loss)), epoch_loss.values, label=f"{name} (epoch)")
+                elif 'train_loss' in metrics_df.columns and 'epoch' in metrics_df.columns:
+                    # Fallback: Group by epoch and calculate the mean training loss
+                    epoch_loss = metrics_df.groupby('epoch')['train_loss'].mean().dropna()
+                    plt.plot(epoch_loss.index, epoch_loss.values, label=f"{name} (avg/epoch)")
+                elif 'train_loss' in metrics_df.columns:
                     loss_series = metrics_df['train_loss'].dropna()
-                    plt.plot(loss_series.values, label=f"{name}")
+                    plt.plot(loss_series.values, label=f"{name} (steps)")
+
         except Exception as e:
             print(f"Could not load/plot loss for {name}: {e}")
 
-    plt.title("Training Loss per Epoch/Step")
-    plt.xlabel("Step")
+    plt.title("Training Loss per Epoch")
+    plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.legend()
     plt.grid(True)
@@ -197,4 +315,10 @@ if __name__ == "__main__":
     plt.savefig(chart_path)
     plt.close()
     print(f"Training loss chart saved to {chart_path}")
+
+    if results:
+        results_df = pd.DataFrame(results)
+        results_path = "outputs/evaluation_metrics.csv"
+        results_df.to_csv(results_path, index=False)
+        print(f"\nFinal evaluation metrics saved to {results_path}")
 
