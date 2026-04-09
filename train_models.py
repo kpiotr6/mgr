@@ -1,6 +1,6 @@
 import pandas as pd
 from darts import TimeSeries
-from darts.models import TFTModel, BlockRNNModel, NaiveSeasonal, NLinearModel, DLinearModel, XGBModel, RandomForest, TSMixerModel
+from darts.models import TFTModel, BlockRNNModel, NaiveSeasonal, NLinearModel, DLinearModel, XGBModel, RandomForest, TSMixerModel, NHiTSModel
 from darts.dataprocessing.transformers import Scaler
 from darts.metrics import mae, mse
 from pytorch_lightning.loggers import CSVLogger
@@ -24,11 +24,29 @@ def load_data(filepath: str):
     targets = []
     covariates = []
 
+    INPUT_CHUNK_LENGTH = 180
+    base_input_cols = [c for c in INPUT_COLS if c != "is_at_edge"]
+
     for _, group_df in df.groupby(group_id):
         group_df = group_df.sort_values(TIME_COL).drop_duplicates(subset=[TIME_COL])
 
-        if len(group_df) < 540:
+        if len(group_df) < 720:
             continue
+
+        x_series = pd.Series(range(len(group_df)), index=group_df.index)
+
+        extended_input_cols = list(INPUT_COLS)
+        for col in base_input_cols:
+            group_df[f"{col}_mean"] = group_df[col].rolling(window=INPUT_CHUNK_LENGTH, min_periods=1).mean()
+            group_df[f"{col}_std"] = group_df[col].rolling(window=INPUT_CHUNK_LENGTH, min_periods=1).std().fillna(0)
+            group_df[f"{col}_min"] = group_df[col].rolling(window=INPUT_CHUNK_LENGTH, min_periods=1).min()
+            group_df[f"{col}_max"] = group_df[col].rolling(window=INPUT_CHUNK_LENGTH, min_periods=1).max()
+
+            cov_xy = group_df[col].rolling(window=INPUT_CHUNK_LENGTH, min_periods=2).cov(x_series)
+            var_x = x_series.rolling(window=INPUT_CHUNK_LENGTH, min_periods=2).var()
+            group_df[f"{col}_trend"] = (cov_xy / var_x).fillna(0)
+
+            extended_input_cols.extend([f"{col}_mean", f"{col}_std", f"{col}_min", f"{col}_max", f"{col}_trend"])
 
         # Create targets TimeSeries
         target_ts = TimeSeries.from_dataframe(
@@ -42,7 +60,7 @@ def load_data(filepath: str):
         cov_ts = TimeSeries.from_dataframe(
             group_df,
             time_col=TIME_COL,
-            value_cols=INPUT_COLS,
+            value_cols=extended_input_cols,
         )
         covariates.append(cov_ts)
 
@@ -55,7 +73,7 @@ if __name__ == "__main__":
     covariates_list = []
 
     # Number of files to use for dataset creation (None to use all files)
-    MAX_FILES_TO_LOAD = 1
+    MAX_FILES_TO_LOAD = None
 
     data_dir = "data_preprocessed"
     all_files = glob.glob(os.path.join(data_dir, "*.csv"))
@@ -112,7 +130,7 @@ if __name__ == "__main__":
     test_covariates_scaled = covariates_scaler.transform(test_covariates)
 
     INPUT_CHUNK_LENGTH = 180
-    OUTPUT_CHUNK_LENGTH = 45
+    OUTPUT_CHUNK_LENGTH = 90
 
     # Models definition
     models = {
@@ -120,6 +138,7 @@ if __name__ == "__main__":
         # "BlockRNN": BlockRNNModel(
         #     model_name="BlockRNN",
         #     save_checkpoints=True,
+        #     force_reset=True,
         #     model="GRU",
         #     hidden_dim=64,
         #     n_rnn_layers=2,
@@ -132,12 +151,48 @@ if __name__ == "__main__":
         #     lr_scheduler_kwargs={"factor": 0.5, "patience": 3, "monitor": "val_loss"},
         #     pl_trainer_kwargs={"logger": CSVLogger("outputs/logs", name="BlockRNN"), "log_every_n_steps": 1}
         # ),
+
+        "NLinear": NLinearModel(
+            model_name="NLinear",
+            save_checkpoints=True,
+            force_reset=True,
+            input_chunk_length=INPUT_CHUNK_LENGTH,
+            output_chunk_length=OUTPUT_CHUNK_LENGTH,
+            const_init=False,
+            n_epochs=20,
+            batch_size=128,
+            optimizer_kwargs={"lr": 1e-3},
+            lr_scheduler_cls=ReduceLROnPlateau,
+            lr_scheduler_kwargs={"factor": 0.5, "patience": 5, "monitor": "val_loss"},
+            pl_trainer_kwargs={
+                "logger": CSVLogger("outputs/logs", name="NLinear"),
+                "log_every_n_steps": 1
+            }
+        ),
+        "DLinear": DLinearModel(
+            model_name="DLinear",
+            save_checkpoints=True,
+            force_reset=True,
+            input_chunk_length=INPUT_CHUNK_LENGTH,
+            output_chunk_length=OUTPUT_CHUNK_LENGTH,
+            const_init=False,
+            n_epochs=20,
+            batch_size=128,
+            optimizer_kwargs={"lr": 1e-3},
+            lr_scheduler_cls=ReduceLROnPlateau,
+            lr_scheduler_kwargs={"factor": 0.5, "patience": 5, "monitor": "val_loss"},
+            pl_trainer_kwargs={
+                "logger": CSVLogger("outputs/logs", name="DLinear"),
+                "log_every_n_steps": 1
+            }
+        ),
         # "TFT": TFTModel(
         #     model_name="TFT",
         #     save_checkpoints=True,
+        #     force_reset=True,
         #     input_chunk_length=INPUT_CHUNK_LENGTH,
         #     output_chunk_length=OUTPUT_CHUNK_LENGTH,
-        #     hidden_size=64,
+        #     hidden_size=128,
         #     lstm_layers=2,
         #     num_attention_heads=4,
         #     dropout=0.1,
@@ -152,57 +207,42 @@ if __name__ == "__main__":
         #         "log_every_n_steps": 1
         #     }
         # ),
-        "NLinear": NLinearModel(
-            model_name="NLinear",
-            save_checkpoints=True,
-            input_chunk_length=INPUT_CHUNK_LENGTH,
-            output_chunk_length=OUTPUT_CHUNK_LENGTH,
-            const_init=False,
-            n_epochs=40,
-            batch_size=128,
-            optimizer_kwargs={"lr": 1e-3},
-            lr_scheduler_cls=ReduceLROnPlateau,
-            lr_scheduler_kwargs={"factor": 0.5, "patience": 5, "monitor": "val_loss"},
-            pl_trainer_kwargs={
-                "logger": CSVLogger("outputs/logs", name="NLinear"),
-                "log_every_n_steps": 1
-            }
-        ),
-        "DLinear": DLinearModel(
-            model_name="DLinear",
-            save_checkpoints=True,
-            input_chunk_length=INPUT_CHUNK_LENGTH,
-            output_chunk_length=OUTPUT_CHUNK_LENGTH,
-            const_init=False,
-            n_epochs=40,
-            batch_size=128,
-            optimizer_kwargs={"lr": 1e-3},
-            lr_scheduler_cls=ReduceLROnPlateau,
-            lr_scheduler_kwargs={"factor": 0.5, "patience": 5, "monitor": "val_loss"},
-            pl_trainer_kwargs={
-                "logger": CSVLogger("outputs/logs", name="DLinear"),
-                "log_every_n_steps": 1
-            }
-        ),
-        "TSMixer": TSMixerModel(
-            model_name="TSMixer",
-            save_checkpoints=True,
-            input_chunk_length=INPUT_CHUNK_LENGTH,
-            output_chunk_length=OUTPUT_CHUNK_LENGTH,
-            hidden_size=64,
-            ff_size=64,
-            num_blocks=3,
-            dropout=0.1,
-            n_epochs=20,
-            batch_size=32,
-            optimizer_kwargs={"lr": 1e-3},
-            lr_scheduler_cls=ReduceLROnPlateau,
-            lr_scheduler_kwargs={"factor": 0.5, "patience": 3, "monitor": "val_loss"},
-            pl_trainer_kwargs={
-                "logger": CSVLogger("outputs/logs", name="TSMixer"),
-                "log_every_n_steps": 1
-            }
-        ),
+        # "TSMixer": TSMixerModel(
+        #     model_name="TSMixer",
+        #     save_checkpoints=True,
+        #     force_reset=True,
+        #     input_chunk_length=INPUT_CHUNK_LENGTH,
+        #     output_chunk_length=OUTPUT_CHUNK_LENGTH,
+        #     hidden_size=64,
+        #     ff_size=64,
+        #     num_blocks=3,
+        #     dropout=0.1,
+        #     n_epochs=20,
+        #     batch_size=32,
+        #     optimizer_kwargs={"lr": 1e-3},
+        #     lr_scheduler_cls=ReduceLROnPlateau,
+        #     lr_scheduler_kwargs={"factor": 0.5, "patience": 3, "monitor": "val_loss"},
+        #     pl_trainer_kwargs={
+        #         "logger": CSVLogger("outputs/logs", name="TSMixer"),
+        #         "log_every_n_steps": 1
+        #     }
+        # ),
+        # "NHiTS": NHiTSModel(
+        #     model_name="NHiTS",
+        #     save_checkpoints=True,
+        #     force_reset=True,
+        #     input_chunk_length=INPUT_CHUNK_LENGTH,
+        #     output_chunk_length=OUTPUT_CHUNK_LENGTH,
+        #     n_epochs=20,
+        #     batch_size=32,
+        #     optimizer_kwargs={"lr": 1e-3},
+        #     lr_scheduler_cls=ReduceLROnPlateau,
+        #     lr_scheduler_kwargs={"factor": 0.5, "patience": 4, "monitor": "val_loss"},
+        #     pl_trainer_kwargs={
+        #         "logger": CSVLogger("outputs/logs", name="NHiTS"),
+        #         "log_every_n_steps": 1
+        #     }
+        # ),
     }
 
     results = []
@@ -221,8 +261,8 @@ if __name__ == "__main__":
                 val_series=val_targets_scaled,
                 val_future_covariates=val_covariates_scaled
             )
-        elif name == "BlockRNN":
-            # BlockRNN accepts covariates via the past_covariates argument
+        elif name in ["BlockRNN", "NHiTS"]:
+            # BlockRNN and NHiTS accept covariates via the past_covariates argument
             model.fit(
                 series=train_targets_scaled,
                 past_covariates=train_covariates_scaled,
@@ -241,7 +281,7 @@ if __name__ == "__main__":
         # Testing
         print(f"Testing {name}...")
 
-        if name in ["TFT", "NLinear", "DLinear", "BlockRNN", "TSMixer"]:
+        if name in ["TFT", "NLinear", "DLinear", "BlockRNN", "TSMixer", "NHiTS"]:
             try:
                 # Load the best model from checkpoint for testing
                 model = type(model).load_from_checkpoint(model_name=name, best=True)
@@ -255,7 +295,7 @@ if __name__ == "__main__":
                 # To keep it quick, we'll just evaluate on a subset or full train
                 train_preds_scaled = model.predict(n=OUTPUT_CHUNK_LENGTH, series=[t[:-OUTPUT_CHUNK_LENGTH] for t in train_targets_scaled if len(t) > INPUT_CHUNK_LENGTH + OUTPUT_CHUNK_LENGTH],
                                             future_covariates=[c for t, c in zip(train_targets_scaled, train_covariates_scaled) if len(t) > INPUT_CHUNK_LENGTH + OUTPUT_CHUNK_LENGTH] if name in ["TFT", "NLinear", "DLinear", "XGBoost", "RandomForest", "TSMixer"] else None,
-                                            past_covariates=[c for t, c in zip(train_targets_scaled, train_covariates_scaled) if len(t) > INPUT_CHUNK_LENGTH + OUTPUT_CHUNK_LENGTH] if name == "BlockRNN" else None)
+                                            past_covariates=[c for t, c in zip(train_targets_scaled, train_covariates_scaled) if len(t) > INPUT_CHUNK_LENGTH + OUTPUT_CHUNK_LENGTH] if name in ["BlockRNN", "NHiTS"] else None)
 
                 # Inverse transform the predictions back to original distribution
                 if isinstance(train_preds_scaled, list):
@@ -272,6 +312,8 @@ if __name__ == "__main__":
 
         mae_list = []
         mse_list = []
+        mae_cols = {col: [] for col in TARGET_COLS}
+        mse_cols = {col: [] for col in TARGET_COLS}
         all_preds = []
         all_trues = []
 
@@ -288,7 +330,7 @@ if __name__ == "__main__":
 
             if name in ["TFT", "NLinear", "DLinear", "XGBoost", "RandomForest", "TSMixer"]:
                 pred_scaled = model.predict(n=OUTPUT_CHUNK_LENGTH, series=y_train, future_covariates=ts_cov)
-            elif name == "BlockRNN":
+            elif name in ["BlockRNN", "NHiTS"]:
                 pred_scaled = model.predict(n=OUTPUT_CHUNK_LENGTH, series=y_train, past_covariates=ts_cov)
             elif name == "NaiveLastValue":
                 model.fit(y_train)
@@ -301,6 +343,10 @@ if __name__ == "__main__":
 
             mae_list.append(mae(y_true, pred))
             mse_list.append(mse(y_true, pred))
+
+            for col in TARGET_COLS:
+                mae_cols[col].append(mae(y_true[col], pred[col]))
+                mse_cols[col].append(mse(y_true[col], pred[col]))
 
             pred_df = pred.to_dataframe()
             pred_df['block_idx'] = i
@@ -315,13 +361,22 @@ if __name__ == "__main__":
         if len(mae_list) > 0:
             avg_mae = sum(mae_list) / len(mae_list)
             avg_mse = sum(mse_list) / len(mse_list)
-            print(f"Results for {name}: MAE={avg_mae:.4f}, MSE={avg_mse:.4f}")
 
-            results.append({
+            res_dict = {
                 "Model": name,
                 "MAE": avg_mae,
                 "MSE": avg_mse
-            })
+            }
+
+            print(f"Results for {name}: MAE={avg_mae:.4f}, MSE={avg_mse:.4f}")
+            for col in TARGET_COLS:
+                avg_mae_col = sum(mae_cols[col]) / len(mae_cols[col])
+                avg_mse_col = sum(mse_cols[col]) / len(mse_cols[col])
+                res_dict[f"MAE_{col}"] = avg_mae_col
+                res_dict[f"MSE_{col}"] = avg_mse_col
+                print(f"  {col} - MAE: {avg_mae_col:.4f}, MSE: {avg_mse_col:.4f}")
+
+            results.append(res_dict)
 
             # Save to CSV
             pd.concat(all_preds).to_csv(f"outputs/pred_{name}.csv")
