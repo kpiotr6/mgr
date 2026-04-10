@@ -13,19 +13,16 @@ def main():
     for file in files:
         df = pd.read_csv(file)
 
-        cols_to_drop = ['is_at_edge', 'time', 'sequence_index']
+        cols_to_drop = ['is_at_edge', 'time']
         # Also drop any Unnamed columns that might have slipped in
         y_cols = [col for col in df.columns if col not in cols_to_drop and not col.startswith('Unnamed')]
 
         plt.figure(figsize=(14, 8))
 
         for col in y_cols:
-            if 'sequence_index' in df.columns:
-                plt.plot(df['sequence_index'], df[col], label=col, alpha=0.8)
-            else:
-                plt.plot(df[col], label=col, alpha=0.8)
+            plt.plot(df.index, df[col], label=col, alpha=0.8)
 
-        plt.xlabel('sequence_index')
+        plt.xlabel('Index')
         plt.ylabel('Value')
         plt.title(f'Values from {os.path.basename(file)}')
 

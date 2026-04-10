@@ -7,6 +7,7 @@ from pytorch_lightning.loggers import CSVLogger
 import matplotlib.pyplot as plt
 from config import INPUT_COLS, TARGET_COLS, TIME_COL, DEFAULT_FREQ
 import torch
+from torchmetrics import MeanAbsoluteError, MeanSquaredError, MetricCollection
 import os
 import glob
 import random
@@ -24,29 +25,11 @@ def load_data(filepath: str):
     targets = []
     covariates = []
 
-    INPUT_CHUNK_LENGTH = 180
-    base_input_cols = [c for c in INPUT_COLS if c != "is_at_edge"]
-
     for _, group_df in df.groupby(group_id):
         group_df = group_df.sort_values(TIME_COL).drop_duplicates(subset=[TIME_COL])
 
         if len(group_df) < 720:
             continue
-
-        x_series = pd.Series(range(len(group_df)), index=group_df.index)
-
-        extended_input_cols = list(INPUT_COLS)
-        for col in base_input_cols:
-            group_df[f"{col}_mean"] = group_df[col].rolling(window=INPUT_CHUNK_LENGTH, min_periods=1).mean()
-            group_df[f"{col}_std"] = group_df[col].rolling(window=INPUT_CHUNK_LENGTH, min_periods=1).std().fillna(0)
-            group_df[f"{col}_min"] = group_df[col].rolling(window=INPUT_CHUNK_LENGTH, min_periods=1).min()
-            group_df[f"{col}_max"] = group_df[col].rolling(window=INPUT_CHUNK_LENGTH, min_periods=1).max()
-
-            cov_xy = group_df[col].rolling(window=INPUT_CHUNK_LENGTH, min_periods=2).cov(x_series)
-            var_x = x_series.rolling(window=INPUT_CHUNK_LENGTH, min_periods=2).var()
-            group_df[f"{col}_trend"] = (cov_xy / var_x).fillna(0)
-
-            extended_input_cols.extend([f"{col}_mean", f"{col}_std", f"{col}_min", f"{col}_max", f"{col}_trend"])
 
         # Create targets TimeSeries
         target_ts = TimeSeries.from_dataframe(
@@ -60,7 +43,7 @@ def load_data(filepath: str):
         cov_ts = TimeSeries.from_dataframe(
             group_df,
             time_col=TIME_COL,
-            value_cols=extended_input_cols,
+            value_cols=INPUT_COLS,
         )
         covariates.append(cov_ts)
 
@@ -73,7 +56,7 @@ if __name__ == "__main__":
     covariates_list = []
 
     # Number of files to use for dataset creation (None to use all files)
-    MAX_FILES_TO_LOAD = None
+    MAX_FILES_TO_LOAD = 1
 
     data_dir = "data_preprocessed"
     all_files = glob.glob(os.path.join(data_dir, "*.csv"))
@@ -129,8 +112,11 @@ if __name__ == "__main__":
     test_targets_scaled = target_scaler.transform(test_targets)
     test_covariates_scaled = covariates_scaler.transform(test_covariates)
 
-    INPUT_CHUNK_LENGTH = 180
+    INPUT_CHUNK_LENGTH = 90
     OUTPUT_CHUNK_LENGTH = 90
+
+    # Metrics for PyTorch Lightning logging
+    metrics = MetricCollection([MeanAbsoluteError(), MeanSquaredError()])
 
     # Models definition
     models = {
@@ -159,9 +145,10 @@ if __name__ == "__main__":
             input_chunk_length=INPUT_CHUNK_LENGTH,
             output_chunk_length=OUTPUT_CHUNK_LENGTH,
             const_init=False,
-            n_epochs=20,
+            n_epochs=40,
             batch_size=128,
             optimizer_kwargs={"lr": 1e-3},
+            torch_metrics=metrics.clone(),
             lr_scheduler_cls=ReduceLROnPlateau,
             lr_scheduler_kwargs={"factor": 0.5, "patience": 5, "monitor": "val_loss"},
             pl_trainer_kwargs={
@@ -176,9 +163,10 @@ if __name__ == "__main__":
             input_chunk_length=INPUT_CHUNK_LENGTH,
             output_chunk_length=OUTPUT_CHUNK_LENGTH,
             const_init=False,
-            n_epochs=20,
+            n_epochs=40,
             batch_size=128,
             optimizer_kwargs={"lr": 1e-3},
+            torch_metrics=metrics.clone(),
             lr_scheduler_cls=ReduceLROnPlateau,
             lr_scheduler_kwargs={"factor": 0.5, "patience": 5, "monitor": "val_loss"},
             pl_trainer_kwargs={
@@ -423,6 +411,45 @@ if __name__ == "__main__":
     plt.savefig(chart_path)
     plt.close()
     print(f"Training loss chart saved to {chart_path}")
+
+    print("\nGenerating MAE and MSE charts...")
+    for metric_name in ['MeanAbsoluteError', 'MeanSquaredError']:
+        for prefix, phase in zip(['train_', 'val_'], ['Training', 'Validation']):
+            plt.figure(figsize=(10, 6))
+            col_name = f'{prefix}{metric_name}'
+            col_name_epoch = f'{prefix}{metric_name}_epoch'
+
+            plotted = False
+            for name in models.keys():
+                if name in ["NaiveLastValue", "XGBoost", "RandomForest"]:
+                    continue
+                try:
+                    metrics_paths = glob.glob(f"outputs/logs/{name}/*/metrics.csv")
+                    if metrics_paths:
+                        metrics_paths.sort(key=os.path.getmtime)
+                        metrics_df = pd.read_csv(metrics_paths[-1])
+
+                        if col_name_epoch in metrics_df.columns:
+                            epoch_metric = metrics_df[col_name_epoch].dropna()
+                            plt.plot(range(len(epoch_metric)), epoch_metric.values, label=f"{name}")
+                            plotted = True
+                        elif col_name in metrics_df.columns and 'epoch' in metrics_df.columns:
+                            epoch_metric = metrics_df.groupby('epoch')[col_name].mean().dropna()
+                            plt.plot(epoch_metric.index, epoch_metric.values, label=f"{name}")
+                            plotted = True
+                except Exception as e:
+                    pass
+
+            if plotted:
+                plt.xlabel('Epoch')
+                plt.ylabel(metric_name)
+                plt.title(f'{phase} {metric_name}')
+                plt.legend()
+                plt.grid(True)
+                chart_path_metric = f'outputs/{phase.lower()}_{metric_name.lower()}.png'
+                plt.savefig(chart_path_metric)
+                print(f"{phase} {metric_name} chart saved to {chart_path_metric}")
+            plt.close()
 
     if results:
         results_df = pd.DataFrame(results)

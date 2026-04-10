@@ -8,7 +8,6 @@ import pandas as pd
 from config import DEFAULT_FREQ, INPUT_COLS, TARGET_COLS, TIME_COL
 
 
-SEQUENCE_COL = "sequence_index"
 EDGE_COL = "is_at_edge"
 
 
@@ -56,7 +55,6 @@ def preprocess_frames(
     data_columns = [column for column in all_rows.columns if column not in [TIME_COL, "_source_file"]]
 
     records: list[dict[str, object]] = []
-    next_sequence_index = 0
     edge_until: pd.Timestamp | None = None
 
     prev_time: pd.Timestamp | None = None
@@ -79,13 +77,11 @@ def preprocess_frames(
                         imputed_row: dict[str, object] = {
                             TIME_COL: imputed_time,
                             "_source_file": current_source,
-                            SEQUENCE_COL: next_sequence_index,
                             EDGE_COL: is_edge,
                         }
                         if prev_values is not None:
                             imputed_row.update(prev_values)
                         records.append(imputed_row)
-                        next_sequence_index += 1
                 else:
                     candidate_edge_until = current_time + edge_window
                     if edge_until is None or candidate_edge_until > edge_until:
@@ -95,18 +91,16 @@ def preprocess_frames(
         current_row: dict[str, object] = {
             TIME_COL: current_time,
             "_source_file": current_source,
-            SEQUENCE_COL: next_sequence_index,
             EDGE_COL: current_is_edge,
         }
         current_row.update(current_values)
         records.append(current_row)
-        next_sequence_index += 1
 
         prev_time = current_time
         prev_values = current_values
 
     processed = pd.DataFrame(records)
-    ordered_columns = [TIME_COL, SEQUENCE_COL, EDGE_COL] + data_columns + ["_source_file"]
+    ordered_columns = [TIME_COL, EDGE_COL] + data_columns + ["_source_file"]
     return processed[ordered_columns]
 
 

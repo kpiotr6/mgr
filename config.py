@@ -13,5 +13,5 @@ TARGET_COLS = [
     "gran1_blain",
 ]
 
-TIME_COL = "sequence_index"
+TIME_COL = "time"
 DEFAULT_FREQ = '1'
