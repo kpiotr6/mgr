@@ -3,7 +3,6 @@ INPUT_COLS = [
     "fresh_feed_setpoint",
     "circulation_fan_speed",
     "aspiration_fan_speed",
-    "is_at_edge"
 ]
 
 TARGET_COLS = [
