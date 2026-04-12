@@ -121,7 +121,7 @@ if __name__ == "__main__":
     test_covariates_scaled = covariates_scaler.transform(test_covariates)
 
     INPUT_CHUNK_LENGTHS = [30, 60, 120]
-    OUTPUT_CHUNK_LENGTHS = [30, 60, 120]
+    OUTPUT_CHUNK_LENGTHS = [30, 60, 120, 180]
 
     all_results = []
 
@@ -146,7 +146,7 @@ if __name__ == "__main__":
                     input_chunk_length=INPUT_CHUNK_LENGTH,
                     output_chunk_length=OUTPUT_CHUNK_LENGTH,
                     const_init=False,
-                    n_epochs=1,
+                    n_epochs=40,
                     batch_size=128,
                     optimizer_kwargs={"lr": 1e-3},
                     lr_scheduler_cls=ReduceLROnPlateau,
@@ -163,7 +163,7 @@ if __name__ == "__main__":
                     input_chunk_length=INPUT_CHUNK_LENGTH,
                     output_chunk_length=OUTPUT_CHUNK_LENGTH,
                     const_init=False,
-                    n_epochs=1,
+                    n_epochs=40,
                     batch_size=128,
                     optimizer_kwargs={"lr": 1e-3},
                     lr_scheduler_cls=ReduceLROnPlateau,
@@ -185,7 +185,7 @@ if __name__ == "__main__":
                     ff_size=64,
                     num_blocks=3,
                     dropout=0.1,
-                    n_epochs=1,
+                    n_epochs=20,
                     batch_size=128,
                     optimizer_kwargs={"lr": 1e-3},
                     # Removed custom torch_metrics
@@ -204,7 +204,7 @@ if __name__ == "__main__":
                     force_reset=True,
                     input_chunk_length=INPUT_CHUNK_LENGTH,
                     output_chunk_length=OUTPUT_CHUNK_LENGTH,
-                    n_epochs=1,
+                    n_epochs=20,
                     batch_size=128,
                     optimizer_kwargs={"lr": 1e-3},
                     lr_scheduler_cls=ReduceLROnPlateau,
