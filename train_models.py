@@ -19,7 +19,6 @@ logging.getLogger("pytorch_lightning").setLevel(logging.ERROR)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").setLevel(logging.ERROR)
 logging.getLogger("pytorch_lightning.accelerators.cuda").setLevel(logging.ERROR)
 
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 from generate_charts import generate_charts
 
 
@@ -64,7 +63,7 @@ if __name__ == "__main__":
     covariates_list = []
 
     # Number of files to use for dataset creation (None to use all files)
-    MAX_FILES_TO_LOAD = 1
+    MAX_FILES_TO_LOAD = None
 
     data_dir = "data_preprocessed"
     all_files = glob.glob(os.path.join(data_dir, "*.csv"))
@@ -121,7 +120,7 @@ if __name__ == "__main__":
     test_covariates_scaled = covariates_scaler.transform(test_covariates)
 
     INPUT_CHUNK_LENGTHS = [30, 60, 120]
-    OUTPUT_CHUNK_LENGTHS = [30, 60, 120, 180]
+    OUTPUT_CHUNK_LENGTHS = [30, 60, 120]
 
     all_results = []
 
@@ -149,8 +148,6 @@ if __name__ == "__main__":
                     n_epochs=40,
                     batch_size=128,
                     optimizer_kwargs={"lr": 1e-3},
-                    lr_scheduler_cls=ReduceLROnPlateau,
-                    lr_scheduler_kwargs={"factor": 0.5, "patience": 5, "monitor": "val_loss"},
                     pl_trainer_kwargs={
                         "logger": CSVLogger(f"outputs/logs/I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}", name="NLinear"),
                         "log_every_n_steps": 1
@@ -166,8 +163,6 @@ if __name__ == "__main__":
                     n_epochs=40,
                     batch_size=128,
                     optimizer_kwargs={"lr": 1e-3},
-                    lr_scheduler_cls=ReduceLROnPlateau,
-                    lr_scheduler_kwargs={"factor": 0.5, "patience": 5, "monitor": "val_loss"},
                     pl_trainer_kwargs={
                         "logger": CSVLogger(f"outputs/logs/I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}", name="NLinear"),
                         "log_every_n_steps": 1,
@@ -189,8 +184,6 @@ if __name__ == "__main__":
                     batch_size=128,
                     optimizer_kwargs={"lr": 1e-3},
                     # Removed custom torch_metrics
-                    lr_scheduler_cls=ReduceLROnPlateau,
-                    lr_scheduler_kwargs={"factor": 0.5, "patience": 5, "monitor": "val_loss"},
                     pl_trainer_kwargs={
                         "logger": CSVLogger(f"outputs/logs/I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}", name="TSMixer"),
                         "log_every_n_steps": 1,
@@ -207,8 +200,6 @@ if __name__ == "__main__":
                     n_epochs=20,
                     batch_size=128,
                     optimizer_kwargs={"lr": 1e-3},
-                    lr_scheduler_cls=ReduceLROnPlateau,
-                    lr_scheduler_kwargs={"factor": 0.5, "patience": 5, "monitor": "val_loss"},
                     pl_trainer_kwargs={
                         "logger": CSVLogger(f"outputs/logs/I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}", name="NHiTS"),
                         "log_every_n_steps": 1,
