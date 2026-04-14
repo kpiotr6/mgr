@@ -4,3 +4,4 @@ outputs/
 data_preprocessed/
 .venv/**
 darts_logs/**
+saved_models/**

@@ -1,6 +1,6 @@
 import pandas as pd
 from darts import TimeSeries
-from darts.models import TFTModel, BlockRNNModel, NaiveSeasonal, NLinearModel, DLinearModel, XGBModel, RandomForest, TSMixerModel, NHiTSModel
+from darts.models import TFTModel, BlockRNNModel, NaiveSeasonal, NLinearModel, DLinearModel, XGBModel, RandomForest, TSMixerModel, NHiTSModel, LinearRegressionModel, LightGBMModel, CatBoostModel
 from darts.dataprocessing.transformers import Scaler
 from darts.metrics import mae, mse
 from pytorch_lightning.loggers import CSVLogger
@@ -63,7 +63,7 @@ if __name__ == "__main__":
     covariates_list = []
 
     # Number of files to use for dataset creation (None to use all files)
-    MAX_FILES_TO_LOAD = None
+    MAX_FILES_TO_LOAD = 1
 
     data_dir = "data_preprocessed"
     all_files = glob.glob(os.path.join(data_dir, "*.csv"))
@@ -123,6 +123,7 @@ if __name__ == "__main__":
     OUTPUT_CHUNK_LENGTHS = [30, 60, 120]
 
     all_results = []
+    best_models_dict = {}
 
     for INPUT_CHUNK_LENGTH in INPUT_CHUNK_LENGTHS:
         for OUTPUT_CHUNK_LENGTH in OUTPUT_CHUNK_LENGTHS:
@@ -138,75 +139,90 @@ if __name__ == "__main__":
             # Models definition
             models = {
                 "NaiveLastValue": NaiveSeasonal(K=1),
-                "NLinear": NLinearModel(
-                    model_name=f"NLinear_I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}",
-                    save_checkpoints=True,
-                    force_reset=True,
-                    input_chunk_length=INPUT_CHUNK_LENGTH,
-                    output_chunk_length=OUTPUT_CHUNK_LENGTH,
-                    const_init=False,
-                    n_epochs=40,
-                    batch_size=128,
-                    optimizer_kwargs={"lr": 1e-3},
-                    pl_trainer_kwargs={
-                        "logger": CSVLogger(f"outputs/logs/I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}", name="NLinear"),
-                        "log_every_n_steps": 1
-                    }
+                "LinearRegression": LinearRegressionModel(
+                    lags=INPUT_CHUNK_LENGTH,
+                    lags_future_covariates=(INPUT_CHUNK_LENGTH, OUTPUT_CHUNK_LENGTH),
+                    output_chunk_length=OUTPUT_CHUNK_LENGTH
                 ),
-                "DLinear": DLinearModel(
-                    model_name=f"DLinear_I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}",
-                    save_checkpoints=True,
-                    force_reset=True,
-                    input_chunk_length=INPUT_CHUNK_LENGTH,
-                    output_chunk_length=OUTPUT_CHUNK_LENGTH,
-                    const_init=False,
-                    n_epochs=40,
-                    batch_size=128,
-                    optimizer_kwargs={"lr": 1e-3},
-                    pl_trainer_kwargs={
-                        "logger": CSVLogger(f"outputs/logs/I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}", name="NLinear"),
-                        "log_every_n_steps": 1,
-                        "enable_model_summary": False,
-                        "enable_progress_bar": False
-                    }
-                ),
-                "TSMixer": TSMixerModel(
-                    model_name=f"TSMixer_I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}",
-                    save_checkpoints=True,
-                    force_reset=True,
-                    input_chunk_length=INPUT_CHUNK_LENGTH,
-                    output_chunk_length=OUTPUT_CHUNK_LENGTH,
-                    hidden_size=64,
-                    ff_size=64,
-                    num_blocks=3,
-                    dropout=0.1,
-                    n_epochs=20,
-                    batch_size=128,
-                    optimizer_kwargs={"lr": 1e-3},
-                    # Removed custom torch_metrics
-                    pl_trainer_kwargs={
-                        "logger": CSVLogger(f"outputs/logs/I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}", name="TSMixer"),
-                        "log_every_n_steps": 1,
-                        "enable_model_summary": False,
-                        "enable_progress_bar": False
-                    }
-                ),
-                "NHiTS": NHiTSModel(
-                    model_name=f"NHiTS_I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}",
-                    save_checkpoints=True,
-                    force_reset=True,
-                    input_chunk_length=INPUT_CHUNK_LENGTH,
-                    output_chunk_length=OUTPUT_CHUNK_LENGTH,
-                    n_epochs=20,
-                    batch_size=128,
-                    optimizer_kwargs={"lr": 1e-3},
-                    pl_trainer_kwargs={
-                        "logger": CSVLogger(f"outputs/logs/I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}", name="NHiTS"),
-                        "log_every_n_steps": 1,
-                        "enable_model_summary": False,
-                        "enable_progress_bar": False
-                    }
-                ),
+                # "LightGBM": LightGBMModel(
+                #     lags=INPUT_CHUNK_LENGTH,
+                #     lags_future_covariates=(INPUT_CHUNK_LENGTH, OUTPUT_CHUNK_LENGTH),
+                #     output_chunk_length=OUTPUT_CHUNK_LENGTH
+                # ),
+                # "CatBoost": CatBoostModel(
+                #     lags=INPUT_CHUNK_LENGTH,
+                #     lags_future_covariates=(INPUT_CHUNK_LENGTH, OUTPUT_CHUNK_LENGTH),
+                #     output_chunk_length=OUTPUT_CHUNK_LENGTH
+                # ),
+                # "NLinear": NLinearModel(
+                #     model_name=f"NLinear_I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}",
+                #     save_checkpoints=True,
+                #     force_reset=True,
+                #     input_chunk_length=INPUT_CHUNK_LENGTH,
+                #     output_chunk_length=OUTPUT_CHUNK_LENGTH,
+                #     const_init=False,
+                #     n_epochs=40,
+                #     batch_size=128,
+                #     optimizer_kwargs={"lr": 1e-3},
+                #     pl_trainer_kwargs={
+                #         "logger": CSVLogger(f"outputs/logs/I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}", name="NLinear"),
+                #         "log_every_n_steps": 1
+                #     }
+                # ),
+                # "DLinear": DLinearModel(
+                #     model_name=f"DLinear_I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}",
+                #     save_checkpoints=True,
+                #     force_reset=True,
+                #     input_chunk_length=INPUT_CHUNK_LENGTH,
+                #     output_chunk_length=OUTPUT_CHUNK_LENGTH,
+                #     const_init=False,
+                #     n_epochs=40,
+                #     batch_size=128,
+                #     optimizer_kwargs={"lr": 1e-3},
+                #     pl_trainer_kwargs={
+                #         "logger": CSVLogger(f"outputs/logs/I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}", name="NLinear"),
+                #         "log_every_n_steps": 1,
+                #         "enable_model_summary": False,
+                #         "enable_progress_bar": False
+                #     }
+                # ),
+                # "TSMixer": TSMixerModel(
+                #     model_name=f"TSMixer_I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}",
+                #     save_checkpoints=True,
+                #     force_reset=True,
+                #     input_chunk_length=INPUT_CHUNK_LENGTH,
+                #     output_chunk_length=OUTPUT_CHUNK_LENGTH,
+                #     hidden_size=64,
+                #     ff_size=64,
+                #     num_blocks=3,
+                #     dropout=0.1,
+                #     n_epochs=20,
+                #     batch_size=128,
+                #     optimizer_kwargs={"lr": 1e-3},
+                #     # Removed custom torch_metrics
+                #     pl_trainer_kwargs={
+                #         "logger": CSVLogger(f"outputs/logs/I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}", name="TSMixer"),
+                #         "log_every_n_steps": 1,
+                #         "enable_model_summary": False,
+                #         "enable_progress_bar": False
+                #     }
+                # ),
+                # "NHiTS": NHiTSModel(
+                #     model_name=f"NHiTS_I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}",
+                #     save_checkpoints=True,
+                #     force_reset=True,
+                #     input_chunk_length=INPUT_CHUNK_LENGTH,
+                #     output_chunk_length=OUTPUT_CHUNK_LENGTH,
+                #     n_epochs=20,
+                #     batch_size=128,
+                #     optimizer_kwargs={"lr": 1e-3},
+                #     pl_trainer_kwargs={
+                #         "logger": CSVLogger(f"outputs/logs/I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}", name="NHiTS"),
+                #         "log_every_n_steps": 1,
+                #         "enable_model_summary": False,
+                #         "enable_progress_bar": False
+                #     }
+                # ),
             }
 
             for name, model in models.items():
@@ -216,7 +232,7 @@ if __name__ == "__main__":
                 if name == "NaiveLastValue":
                     # For naive, we just evaluate on each test block
                     pass # No training required
-                elif name in ["TFT", "NLinear", "DLinear", "XGBoost", "RandomForest", "TSMixer"]:
+                elif name in ["TFT", "NLinear", "DLinear", "XGBoost", "RandomForest", "TSMixer", "LinearRegression", "LightGBM", "CatBoost"]:
                     model.fit(
                         series=train_targets_scaled,
                         future_covariates=train_covariates_scaled,
@@ -257,7 +273,7 @@ if __name__ == "__main__":
                     try:
                         # To keep it quick, we'll just evaluate on a subset or full train
                         train_preds_scaled = model.predict(n=OUTPUT_CHUNK_LENGTH, series=[t[:-OUTPUT_CHUNK_LENGTH] for t in train_targets_scaled if len(t) > INPUT_CHUNK_LENGTH + OUTPUT_CHUNK_LENGTH],
-                                                    future_covariates=[c for t, c in zip(train_targets_scaled, train_covariates_scaled) if len(t) > INPUT_CHUNK_LENGTH + OUTPUT_CHUNK_LENGTH] if name in ["TFT", "NLinear", "DLinear", "XGBoost", "RandomForest", "TSMixer"] else None,
+                                                    future_covariates=[c for t, c in zip(train_targets_scaled, train_covariates_scaled) if len(t) > INPUT_CHUNK_LENGTH + OUTPUT_CHUNK_LENGTH] if name in ["TFT", "NLinear", "DLinear", "XGBoost", "RandomForest", "TSMixer", "LinearRegression", "LightGBM", "CatBoost"] else None,
                                                     past_covariates=[c for t, c in zip(train_targets_scaled, train_covariates_scaled) if len(t) > INPUT_CHUNK_LENGTH + OUTPUT_CHUNK_LENGTH] if name in ["BlockRNN", "NHiTS"] else None,
                                                     verbose=False)
 
@@ -284,17 +300,19 @@ if __name__ == "__main__":
                 for i, (ts_target, ts_cov, ts_target_raw) in enumerate(zip(test_targets_scaled, test_covariates_scaled, test_targets)):
                     # Predict from the last OUTPUT_CHUNK_LENGTH steps
                     # Ensure the series is long enough
-                    if len(ts_target) <= INPUT_CHUNK_LENGTH + OUTPUT_CHUNK_LENGTH:
+                    MAX_INPUT_CHUNK_LENGTH = max(INPUT_CHUNK_LENGTHS)
+                    if len(ts_target) <= MAX_INPUT_CHUNK_LENGTH + OUTPUT_CHUNK_LENGTH:
                         continue
 
                     stride = 6
-                    for start_idx in range(0, len(ts_target) - INPUT_CHUNK_LENGTH - OUTPUT_CHUNK_LENGTH + 1, stride):
-                        y_train = ts_target[:start_idx + INPUT_CHUNK_LENGTH]
+                    for forecast_start in range(MAX_INPUT_CHUNK_LENGTH, len(ts_target) - OUTPUT_CHUNK_LENGTH + 1, stride):
+                        input_start = forecast_start - INPUT_CHUNK_LENGTH
+                        y_train = ts_target[input_start : forecast_start]
 
                         # y_true needs to be unscaled for metric calculation later
-                        y_true = ts_target_raw[start_idx + INPUT_CHUNK_LENGTH : start_idx + INPUT_CHUNK_LENGTH + OUTPUT_CHUNK_LENGTH]
+                        y_true = ts_target_raw[forecast_start : forecast_start + OUTPUT_CHUNK_LENGTH]
 
-                        if name in ["TFT", "NLinear", "DLinear", "XGBoost", "RandomForest", "TSMixer"]:
+                        if name in ["TFT", "NLinear", "DLinear", "XGBoost", "RandomForest", "TSMixer", "LinearRegression", "LightGBM", "CatBoost"]:
                             pred_scaled = model.predict(n=OUTPUT_CHUNK_LENGTH, series=y_train, future_covariates=ts_cov, verbose=False)
                         elif name in ["BlockRNN", "NHiTS"]:
                             pred_scaled = model.predict(n=OUTPUT_CHUNK_LENGTH, series=y_train, past_covariates=ts_cov, verbose=False)
@@ -316,14 +334,14 @@ if __name__ == "__main__":
 
                         pred_df = pred.to_dataframe()
                         pred_df['block_idx'] = i
-                        pred_df['fcst_origin'] = start_idx
+                        pred_df['fcst_origin'] = forecast_start
                         all_preds.append(pred_df)
 
                         # Save true values only on the first model pass
                         if name == list(models.keys())[0]:
                             true_df = y_true.to_dataframe()
                             true_df['block_idx'] = i
-                            true_df['fcst_origin'] = start_idx
+                            true_df['fcst_origin'] = forecast_start
                             all_trues.append(true_df)
 
                 if len(mae_list) > 0:
@@ -348,6 +366,10 @@ if __name__ == "__main__":
 
                     all_results.append(res_dict)
 
+                    model_key = f"{name}_I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}"
+                    if model_key not in best_models_dict or avg_mae < best_models_dict[model_key]['mae']:
+                        best_models_dict[model_key] = {'mae': avg_mae, 'model': model, 'i': INPUT_CHUNK_LENGTH, 'o': OUTPUT_CHUNK_LENGTH, 'name': name}
+
                     # Save to CSV
                     pd.concat(all_preds).to_csv(f"outputs/pred_{name}_I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}.csv")
                     if all_trues:
@@ -360,6 +382,17 @@ if __name__ == "__main__":
         results_path = "outputs/evaluation_metrics.csv"
         results_df.to_csv(results_path, index=False)
         print(f"\nFinal evaluation metrics saved to {results_path}")
+
+    # Save best models
+    os.makedirs("saved_models", exist_ok=True)
+    for model_key, best_info in best_models_dict.items():
+        name = best_info['name']
+        if name != "NaiveLastValue":
+            try:
+                best_info['model'].save(f"saved_models/{model_key}_best.pt")
+                print(f"Saved best {model_key} model (MAE={best_info['mae']:.4f})")
+            except Exception as e:
+                print(f"Could not save {model_key}: {e}")
 
     # Generate charts
     model_names_to_chart = [name for name in models.keys() if name not in ["NaiveLastValue", "XGBoost", "RandomForest"]]
