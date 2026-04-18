@@ -19,7 +19,7 @@ logging.getLogger("pytorch_lightning").setLevel(logging.ERROR)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").setLevel(logging.ERROR)
 logging.getLogger("pytorch_lightning.accelerators.cuda").setLevel(logging.ERROR)
 
-from generate_charts import generate_charts
+from data_functionalities.generate_charts import generate_charts
 
 
 def load_data(filepath: str):
@@ -63,7 +63,7 @@ if __name__ == "__main__":
     covariates_list = []
 
     # Number of files to use for dataset creation (None to use all files)
-    MAX_FILES_TO_LOAD = 1
+    MAX_FILES_TO_LOAD = None
 
     data_dir = "data_preprocessed"
     all_files = glob.glob(os.path.join(data_dir, "*.csv"))

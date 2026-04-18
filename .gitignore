@@ -1,7 +1,8 @@
 data/
-__pycache__/**
+__pycache__/
 outputs/
 data_preprocessed/
-.venv/**
-darts_logs/**
-saved_models/**
+.venv/
+darts_logs/
+saved_models/
+temp/
