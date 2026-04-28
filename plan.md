@@ -4,7 +4,6 @@ First of all - separate on folders.
  1. Try different subsets of features
  2. Try following:
     - Normalization
-    - Standardization
     - Log transformation
     - Differencing
  3. Check for correlation between features

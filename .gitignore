@@ -6,3 +6,4 @@ data_preprocessed/
 darts_logs/
 saved_models/
 temp/
+plots/
