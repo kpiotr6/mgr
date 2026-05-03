@@ -47,32 +47,34 @@ def get_models(input_chunk_length: int, output_chunk_length: int) -> dict:
 
     models = {
         "NaiveLastValue": NaiveSeasonal(K=1),
-        "LinearRegression": LinearRegressionModel(**linear_regression_kwargs),
+        # "LinearRegression": LinearRegressionModel(**linear_regression_kwargs),
         # "LightGBM": LightGBMModel(
         #     lags=input_chunk_length,
-        #     lags_future_covariates=(input_chunk_length, output_chunk_length),
+        #     lags_past_covariates=input_chunk_length if has_past_covariates else None,
+        #     lags_future_covariates=(input_chunk_length, output_chunk_length) if has_input_covariates else None,
         #     output_chunk_length=output_chunk_length
         # ),
         # "CatBoost": CatBoostModel(
         #     lags=input_chunk_length,
-        #     lags_future_covariates=(input_chunk_length, output_chunk_length),
+        #     lags_past_covariates=input_chunk_length if has_past_covariates else None,
+        #     lags_future_covariates=(input_chunk_length, output_chunk_length) if has_input_covariates else None,
         #     output_chunk_length=output_chunk_length
         # ),
-        # "NLinear": NLinearModel(
-        #     model_name=f"NLinear_I{input_chunk_length}_O{output_chunk_length}",
-        #     save_checkpoints=True,
-        #     force_reset=True,
-        #     input_chunk_length=input_chunk_length,
-        #     output_chunk_length=output_chunk_length,
-        #     const_init=False,
-        #     n_epochs=40,
-        #     batch_size=128,
-        #     optimizer_kwargs={"lr": 1e-3},
-        #     pl_trainer_kwargs={
-        #         "logger": CSVLogger(f"outputs/logs/I{input_chunk_length}_O{output_chunk_length}", name="NLinear"),
-        #         "log_every_n_steps": 1
-        #     }
-        # ),
+        "NLinear": NLinearModel(
+            model_name=f"NLinear_I{input_chunk_length}_O{output_chunk_length}",
+            save_checkpoints=True,
+            force_reset=True,
+            input_chunk_length=input_chunk_length,
+            output_chunk_length=output_chunk_length,
+            const_init=False,
+            n_epochs=40,
+            batch_size=128,
+            optimizer_kwargs={"lr": 1e-3},
+            pl_trainer_kwargs={
+                "logger": CSVLogger(f"outputs/logs/I{input_chunk_length}_O{output_chunk_length}", name="NLinear"),
+                "log_every_n_steps": 1
+            }
+        ),
         # "DLinear": DLinearModel(
         #     model_name=f"DLinear_I{input_chunk_length}_O{output_chunk_length}",
         #     save_checkpoints=True,
