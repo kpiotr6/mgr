@@ -222,7 +222,7 @@ if __name__ == "__main__":
     test_covariates_scaled = covariates_scaler.transform(test_covariates) if has_input_covariates else [None] * len(test_targets)
     test_past_covariates_scaled = past_covariates_scaler.transform(test_past_covariates) if has_past_covariates else [None] * len(test_targets)
 
-    INPUT_CHUNK_LENGTHS = [60]
+    INPUT_CHUNK_LENGTHS = [120]
     OUTPUT_CHUNK_LENGTHS = [30]
 
     all_results = []
