@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 from darts import TimeSeries
 from darts.dataprocessing.transformers import Scaler
-from darts.metrics import mae, mse
+from darts.metrics import mae, rmse, mape
 from darts.models import LinearRegressionModel
 
 warnings.filterwarnings("ignore")
@@ -160,7 +160,8 @@ def evaluate_feature_set(
         val_past_covariates = series_list_from_frames(val_covariate_frames_scaled, selected_past_cols)
 
     mae_list = []
-    mse_list = []
+    rmse_list = []
+    mape_list = []
 
     for block_idx, (ts_target_scaled, ts_target_raw) in enumerate(zip(val_targets_scaled, val_targets_raw)):
         if len(ts_target_scaled) <= input_chunk_length + output_chunk_length:
@@ -191,14 +192,15 @@ def evaluate_feature_set(
             )
 
             mae_list.append(mae(y_true, pred))
-            mse_list.append(mse(y_true, pred))
+            rmse_list.append(rmse(y_true, pred))
+            mape_list.append(mape(y_true, pred))
 
     if not mae_list:
         raise ValueError(
             f"No valid validation windows for target={target_col} and features={list(selected_future_cols) + list(selected_past_cols)}"
         )
 
-    return sum(mae_list) / len(mae_list), sum(mse_list) / len(mse_list)
+    return sum(mae_list) / len(mae_list), sum(rmse_list) / len(rmse_list), sum(mape_list) / len(mape_list)
 
 
 def greedy_feature_selection(
@@ -223,7 +225,7 @@ def greedy_feature_selection(
     selected_past_cols: List[str] = []
     table_rows: List[Dict[str, object]] = []
 
-    baseline_mae, baseline_mse = evaluate_feature_set(
+    baseline_mae, baseline_rmse, baseline_mape = evaluate_feature_set(
         target_col=target_col,
         selected_future_cols=selected_future_cols,
         selected_past_cols=selected_past_cols,
@@ -248,14 +250,16 @@ def greedy_feature_selection(
             "variable_type": "none",
             "decision": "baseline",
             "MAE": baseline_mae,
-            "MSE": baseline_mse,
+            "RMSE": baseline_rmse,
+            "MAPE": baseline_mape,
             "selected_future_covariates": "",
             "selected_past_covariates": "",
         }
     )
 
     current_best_mae = baseline_mae
-    current_best_mse = baseline_mse
+    current_best_rmse = baseline_rmse
+    current_best_mape = baseline_mape
     step = 1
 
     candidate_stream = [("future", candidate) for candidate in future_candidates] + [
@@ -270,7 +274,7 @@ def greedy_feature_selection(
             trial_future = selected_future_cols
             trial_past = selected_past_cols + [candidate]
 
-        trial_mae, trial_mse = evaluate_feature_set(
+        trial_mae, trial_rmse, trial_mape = evaluate_feature_set(
             target_col=target_col,
             selected_future_cols=trial_future,
             selected_past_cols=trial_past,
@@ -295,10 +299,11 @@ def greedy_feature_selection(
             else:
                 selected_past_cols.append(candidate)
             current_best_mae = trial_mae
-            current_best_mse = trial_mse
+            current_best_rmse = trial_rmse
+            current_best_mape = trial_mape
 
         print(
-            f"  Checked {candidate} ({candidate_type}) - MAE: {trial_mae:.4f} "
+            f"  Checked {candidate} ({candidate_type}) - MAE: {trial_mae:.4f}, RMSE: {trial_rmse:.4f}, MAPE: {trial_mape:.4f} "
             f"{'[added]' if improved else '[skipped]'}"
         )
 
@@ -309,7 +314,8 @@ def greedy_feature_selection(
                 "variable_type": candidate_type,
                 "decision": "added" if improved else "skipped",
                 "MAE": trial_mae,
-                "MSE": trial_mse,
+                "RMSE": trial_rmse,
+                "MAPE": trial_mape,
                 "selected_future_covariates": ", ".join(selected_future_cols),
                 "selected_past_covariates": ", ".join(selected_past_cols),
             }

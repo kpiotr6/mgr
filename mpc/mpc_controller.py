@@ -37,16 +37,16 @@ class DiscreteMPCController:
     def get_best_next_inputs(self, desired_targets, past_targets, past_covariates=None):
         """
         Tests all combinations of next-step inputs. Evaluates the outputs against
-        desired_targets using Mean Squared Error (MSE).
+        desired_targets using Root Mean Squared Error (RMSE).
         Returns the best next step input combination.
 
         :param desired_targets: The target values we want to achieve over the horizon.
                                 This should be an array broadcastable to the model's output shape (horizon, num_targets).
         :param past_targets: A Darts TimeSeries containing past target values.
         :param past_covariates: A Darts TimeSeries containing past covariates (if the model requires them).
-        :return: A tuple (best_action, best_mse) where best_action is a dictionary of the best input values.
+        :return: A tuple (best_action, best_rmse) where best_action is a dictionary of the best input values.
         """
-        best_mse = float('inf')
+        best_rmse = float('inf')
         best_action = None
 
         desired_targets_arr = np.array(desired_targets)
@@ -83,18 +83,18 @@ class DiscreteMPCController:
                 prediction = self.model.predict(**predict_kwargs)
                 predicted_vals = prediction.values()
 
-                # Calculate MSE (Mean Squared Error) between prediction and desired targets
-                mse = np.mean((predicted_vals - desired_targets_arr) ** 2)
+                # Calculate RMSE (Root Mean Squared Error) between prediction and desired targets
+                rmse = np.sqrt(np.mean((predicted_vals - desired_targets_arr) ** 2))
 
-                if mse < best_mse:
-                    best_mse = mse
+                if rmse < best_rmse:
+                    best_rmse = rmse
                     best_action = action
             except Exception as e:
                 # E.g., model predict failure
                 print(f"Prediction failed for action {action}: {e}")
                 continue
 
-        return best_action, best_mse
+        return best_action, best_rmse
 
 if __name__ == "__main__":
     from config import TARGET_COLS
@@ -124,7 +124,7 @@ if __name__ == "__main__":
     # Desired targets for the next 'horizon' steps - shape must match (horizon, num_targets)
     desired_targets = np.full((horizon, len(TARGET_COLS)), 0.5)
 
-    best_action, best_mse = controller.get_best_next_inputs(desired_targets, past_targets)
+    best_action, best_rmse = controller.get_best_next_inputs(desired_targets, past_targets)
 
     print(f"Best Action: {best_action}")
-    print(f"Best MSE: {best_mse}")
+    print(f"Best RMSE: {best_rmse}")

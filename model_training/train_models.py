@@ -1,13 +1,8 @@
 import pandas as pd
 import argparse
 from darts import TimeSeries
-from darts.models import TFTModel, BlockRNNModel, NaiveSeasonal, NLinearModel, DLinearModel, XGBModel, RandomForest, TSMixerModel, NHiTSModel, LinearRegressionModel, LightGBMModel, CatBoostModel
 from darts.dataprocessing.transformers import Scaler
-from darts.metrics import mae, mse
-from pytorch_lightning.loggers import CSVLogger
-import matplotlib.pyplot as plt
-import torch
-from torchmetrics import MeanAbsoluteError, MeanSquaredError, MetricCollection
+from darts.metrics import mae, rmse, mape
 import os
 import sys
 import glob
@@ -24,24 +19,25 @@ logging.getLogger("pytorch_lightning.accelerators.cuda").setLevel(logging.ERROR)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
-from config import INPUT_COLS, PAST_COLS, TARGET_COLS, TIME_COL, DEFAULT_FREQ
+from config import INPUT_COLS, PAST_COLS, TARGET_COLS, TIME_COL
 
-from data_functionalities.generate_charts import generate_charts
 from data_functionalities.detrend_data import (
     detrend_timeseries_linear,
     reverse_detrend_timeseries,
-    reverse_detrend_dataframe,
-    get_detrend_storage,
     reset_detrend_storage
 )
 from data_functionalities.log_transform_data import (
     log_transform_timeseries,
     reverse_log_transform_timeseries,
-    reverse_log_transform_dataframe,
-    get_log_transform_storage,
     reset_log_transform_storage,
 )
-from model_definitions import get_models
+from model_definitions import (
+    get_models,
+    NAIVE_MODELS,
+    MODELS_WITH_FUTURE_COVARIATES,
+    MODELS_PAST_COVARIATES_ONLY,
+    CHECKPOINT_MODELS
+)
 
 
 def load_data(filepath: str):
@@ -222,8 +218,8 @@ if __name__ == "__main__":
     test_covariates_scaled = covariates_scaler.transform(test_covariates) if has_input_covariates else [None] * len(test_targets)
     test_past_covariates_scaled = past_covariates_scaler.transform(test_past_covariates) if has_past_covariates else [None] * len(test_targets)
 
-    INPUT_CHUNK_LENGTHS = [120]
-    OUTPUT_CHUNK_LENGTHS = [30]
+    INPUT_CHUNK_LENGTHS = [30, 60]
+    OUTPUT_CHUNK_LENGTHS = [30, 60]
 
     all_results = []
     best_models_dict = {}
@@ -237,8 +233,8 @@ if __name__ == "__main__":
 
             # Metrics for PyTorch Lightning logging
             # Some torchmetrics fail due to `.view(-1)` on non-contiguous tensors inside deep Darts architectures.
-            # We explicitly define the metric collection kwargs internally or omit it to prevent crashes, since MAE and MSE are already logged natively by PyTorch Lightning if needed, but we can pass `None` for custom `torch_metrics` and let the PL logger handle it or set a custom `loss_fn`.
-            # For safe native scaling, we will omit custom `torch_metrics=metrics.clone()` on models that crash.
+            # We explicitly define the metric collection kwargs internally or omit it to prevent crashes, since MAE and RMSE are already logged natively by PyTorch Lightning if needed, but we can pass `None` for custom `torch_metrics` and let the PL logger handle it or set a custom `loss_fn`.
+            # For safe native scaling, we will omit custom `torch_metrics=metrics.clone()` on models that crash
 
             # Models definition
             models = get_models(INPUT_CHUNK_LENGTH, OUTPUT_CHUNK_LENGTH)
@@ -248,10 +244,10 @@ if __name__ == "__main__":
                 print(f"\nTraining {name}...")
 
                 # Naive models don't use covariates, and don't need training on a whole list
-                if name == "NaiveLastValue":
+                if name in NAIVE_MODELS:
                     # For naive, we just evaluate on each test block
                     pass # No training required
-                elif name in ["TFT", "NLinear", "DLinear", "XGBoost", "RandomForest", "TSMixer", "LinearRegression", "LightGBM", "CatBoost"]:
+                elif name in MODELS_WITH_FUTURE_COVARIATES:
                     fit_kwargs = dict(
                         series=train_targets_scaled,
                         val_series=val_targets_scaled,
@@ -263,8 +259,7 @@ if __name__ == "__main__":
                         fit_kwargs["past_covariates"] = train_past_covariates_scaled
                         fit_kwargs["val_past_covariates"] = val_past_covariates_scaled
                     model.fit(**fit_kwargs)
-                elif name in ["BlockRNN", "NHiTS"]:
-                    # BlockRNN and NHiTS accept covariates via the past_covariates argument
+                elif name in MODELS_PAST_COVARIATES_ONLY:
                     fit_kwargs = dict(
                         series=train_targets_scaled,
                         val_series=val_targets_scaled,
@@ -285,7 +280,7 @@ if __name__ == "__main__":
                 # Testing
                 print(f"Testing {name}...")
 
-                if name in ["TFT", "NLinear", "DLinear", "BlockRNN", "TSMixer", "NHiTS"]:
+                if name in CHECKPOINT_MODELS:
                     try:
                         # Load the best model from checkpoint for testing
                         model_name_for_load = f"{name}_I{INPUT_CHUNK_LENGTH}_O{OUTPUT_CHUNK_LENGTH}"
@@ -294,8 +289,8 @@ if __name__ == "__main__":
                     except Exception as e:
                         print(f"Could not load best checkpoint for {name}: {e}")
 
-                # Calculate training MAE/MSE (optional, can be very slow for large datasets)
-                if name not in ["NaiveLastValue"]:
+                # Calculate training MAE/RMSE (optional, can be very slow for large datasets)
+                if name not in NAIVE_MODELS:
                     try:
                         # To keep it quick, we'll just evaluate on a subset or full train
                         selected_indices = [
@@ -312,12 +307,12 @@ if __name__ == "__main__":
                             series=train_series_for_pred,
                             verbose=False,
                         )
-                        if name in ["TFT", "NLinear", "DLinear", "XGBoost", "RandomForest", "TSMixer", "LinearRegression", "LightGBM", "CatBoost"]:
+                        if name in MODELS_WITH_FUTURE_COVARIATES:
                             if has_input_covariates:
                                 predict_kwargs["future_covariates"] = [train_covariates_scaled[idx] for idx in selected_indices]
                             if has_past_covariates:
                                 predict_kwargs["past_covariates"] = [train_past_covariates_scaled[idx] for idx in selected_indices]
-                        elif name in ["BlockRNN", "NHiTS"] and has_past_covariates:
+                        elif name in MODELS_PAST_COVARIATES_ONLY and has_past_covariates:
                             predict_kwargs["past_covariates"] = [train_past_covariates_scaled[idx] for idx in selected_indices]
 
                         train_preds_scaled = model.predict(**predict_kwargs)
@@ -330,15 +325,18 @@ if __name__ == "__main__":
 
                         true_train = [t[-OUTPUT_CHUNK_LENGTH:] for t in train_targets if len(t) > INPUT_CHUNK_LENGTH + OUTPUT_CHUNK_LENGTH]
                         train_mae = mae(true_train, train_preds)
-                        train_mse = mse(true_train, train_preds)
-                        print(f"Training metrics for {name} - MAE: {train_mae:.4f}, MSE: {train_mse:.4f}")
+                        train_rmse = rmse(true_train, train_preds)
+                        train_mape = mape(true_train, train_preds)
+                        print(f"Training metrics for {name} - MAE: {train_mae:.4f}, RMSE: {train_rmse:.4f}, MAPE: {train_mape:.4f}")
                     except Exception as e:
                         print(f"Could not calculate train metrics for {name}: {e}")
 
                 mae_list = []
-                mse_list = []
+                rmse_list = []
+                mape_list = []
                 mae_cols = {col: [] for col in TARGET_COLS}
-                mse_cols = {col: [] for col in TARGET_COLS}
+                rmse_cols = {col: [] for col in TARGET_COLS}
+                mape_cols = {col: [] for col in TARGET_COLS}
                 all_preds = []
 
                 for i, (ts_target, ts_cov, ts_past_cov, ts_target_raw, ts_original_idx) in enumerate(
@@ -358,7 +356,7 @@ if __name__ == "__main__":
                         # y_true needs to be unscaled for metric calculation later
                         y_true = ts_target_raw[forecast_start : forecast_start + OUTPUT_CHUNK_LENGTH]
 
-                        if name in ["TFT", "NLinear", "DLinear", "XGBoost", "RandomForest", "TSMixer", "LinearRegression", "LightGBM", "CatBoost"]:
+                        if name in MODELS_WITH_FUTURE_COVARIATES:
                             predict_kwargs = dict(
                                 n=OUTPUT_CHUNK_LENGTH,
                                 series=y_train,
@@ -369,7 +367,7 @@ if __name__ == "__main__":
                             if has_past_covariates and ts_past_cov is not None:
                                 predict_kwargs["past_covariates"] = ts_past_cov
                             pred_scaled = model.predict(**predict_kwargs)
-                        elif name in ["BlockRNN", "NHiTS"]:
+                        elif name in MODELS_PAST_COVARIATES_ONLY:
                             predict_kwargs = dict(
                                 n=OUTPUT_CHUNK_LENGTH,
                                 series=y_train,
@@ -378,7 +376,7 @@ if __name__ == "__main__":
                             if has_past_covariates and ts_past_cov is not None:
                                 predict_kwargs["past_covariates"] = ts_past_cov
                             pred_scaled = model.predict(**predict_kwargs)
-                        elif name == "NaiveLastValue":
+                        elif name in NAIVE_MODELS:
                             model.fit(y_train)
                             pred_scaled = model.predict(n=OUTPUT_CHUNK_LENGTH)
                         else:
@@ -397,11 +395,13 @@ if __name__ == "__main__":
                             pred = pred_relogged[0]
 
                         mae_list.append(mae(y_true, pred))
-                        mse_list.append(mse(y_true, pred))
+                        rmse_list.append(rmse(y_true, pred))
+                        mape_list.append(mape(y_true, pred))
 
                         for col in TARGET_COLS:
                             mae_cols[col].append(mae(y_true[col], pred[col]))
-                            mse_cols[col].append(mse(y_true[col], pred[col]))
+                            rmse_cols[col].append(rmse(y_true[col], pred[col]))
+                            mape_cols[col].append(mape(y_true[col], pred[col]))
 
                         pred_df = pred.to_dataframe()
                         pred_df['block_idx'] = ts_original_idx
@@ -417,23 +417,28 @@ if __name__ == "__main__":
 
                 if len(mae_list) > 0:
                     avg_mae = sum(mae_list) / len(mae_list)
-                    avg_mse = sum(mse_list) / len(mse_list)
+                    avg_rmse = sum(rmse_list) / len(rmse_list)
+                    avg_mape = sum(mape_list) / len(mape_list)
 
                     res_dict = {
                         "InputChunkLength": INPUT_CHUNK_LENGTH,
                         "OutputChunkLength": OUTPUT_CHUNK_LENGTH,
                         "Model": name,
                         "MAE": avg_mae,
-                        "MSE": avg_mse
+                        "RMSE": avg_rmse,
+                        "MAPE": avg_mape
                     }
 
-                    print(f"Results for {name}: MAE={avg_mae:.4f}, MSE={avg_mse:.4f}")
+                    print(f"Results for {name}: MAE={avg_mae:.4f}, RMSE={avg_rmse:.4f}, MAPE={avg_mape:.4f}")
+
                     for col in TARGET_COLS:
                         avg_mae_col = sum(mae_cols[col]) / len(mae_cols[col])
-                        avg_mse_col = sum(mse_cols[col]) / len(mse_cols[col])
+                        avg_rmse_col = sum(rmse_cols[col]) / len(rmse_cols[col])
+                        avg_mape_col = sum(mape_cols[col]) / len(mape_cols[col])
                         res_dict[f"MAE_{col}"] = avg_mae_col
-                        res_dict[f"MSE_{col}"] = avg_mse_col
-                        print(f"  {col} - MAE: {avg_mae_col:.4f}, MSE: {avg_mse_col:.4f}")
+                        res_dict[f"RMSE_{col}"] = avg_rmse_col
+                        res_dict[f"MAPE_{col}"] = avg_mape_col
+                        print(f"  {col} - MAE: {avg_mae_col:.4f}, RMSE: {avg_rmse_col:.4f}, MAPE: {avg_mape_col:.4f}")
 
                     all_results.append(res_dict)
 
@@ -454,17 +459,3 @@ if __name__ == "__main__":
         results_df.to_csv(results_path, index=False)
         print(f"\nFinal evaluation metrics saved to {results_path}")
 
-    # Save best models
-    os.makedirs("saved_models", exist_ok=True)
-    for model_key, best_info in best_models_dict.items():
-        name = best_info['name']
-        if name != "NaiveLastValue":
-            try:
-                best_info['model'].save(f"saved_models/{model_key}_best.pt")
-                print(f"Saved best {model_key} model (MAE={best_info['mae']:.4f})")
-            except Exception as e:
-                print(f"Could not save {model_key}: {e}")
-
-    # Generate charts
-    model_names_to_chart = [name for name in models.keys() if name not in ["NaiveLastValue", "XGBoost", "RandomForest"]]
-    generate_charts(INPUT_CHUNK_LENGTHS, OUTPUT_CHUNK_LENGTHS, model_names_to_chart)

@@ -5,11 +5,12 @@ import numpy as np
 df = pd.read_csv("result.csv")
 
 # Keep only needed columns in output tables
-base_cols = ["InputChunkLength", "Model", "MAE", "MSE"]
+base_cols = ["InputChunkLength", "Model", "MAE", "RMSE", "MAPE"]
 
-# Round UP to 2 decimals for MAE and MSE
+# Round UP to 2 decimals for MAE, RMSE and MAPE
 df["MAE"] = np.ceil(df["MAE"] * 100) / 100
-df["MSE"] = np.ceil(df["MSE"] * 100) / 100
+df["RMSE"] = np.ceil(df["RMSE"] * 100) / 100
+df["MAPE"] = np.ceil(df["MAPE"] * 100) / 100
 
 # Escape underscores in model names for LaTeX
 df["Model"] = df["Model"].str.replace("_", r"\_", regex=False)
@@ -27,14 +28,14 @@ for i, out_len in enumerate(sorted(df["OutputChunkLength"].unique()), start=1):
         rf"\caption{{Lookback window (InputChunkLength): {lookback_values}}}"
     )
     lines.append(rf"\label{{tab:lookback_{i}}}")
-    lines.append(r"\begin{tabular}{|c|l|c|c|}")
+    lines.append(r"\begin{tabular}{|c|l|c|c|c|}")
     lines.append(r"\hline")
-    lines.append(r"\textbf{InputChunkLength} & \textbf{Model} & \textbf{MAE} & \textbf{MSE} \\")
+    lines.append(r"\textbf{InputChunkLength} & \textbf{Model} & \textbf{MAE} & \textbf{RMSE} & \textbf{MAPE} \\")
     lines.append(r"\hline")
 
     for _, row in sub.iterrows():
         lines.append(
-            f"{int(row['InputChunkLength'])} & {row['Model']} & {row['MAE']:.2f} & {row['MSE']:.2f} \\\\"
+            f"{int(row['InputChunkLength'])} & {row['Model']} & {row['MAE']:.2f} & {row['RMSE']:.2f} & {row['MAPE']:.2f} \\\\"
         )
         lines.append(r"\hline")
 
