@@ -35,7 +35,7 @@ from model_definitions import (
     get_models,
     NAIVE_MODELS,
     MODELS_WITH_FUTURE_COVARIATES,
-    MODELS_PAST_COVARIATES_ONLY,
+    MODELS_FUTURE_COVARIATES_ONLY,
     CHECKPOINT_MODELS
 )
 
@@ -218,9 +218,8 @@ if __name__ == "__main__":
     test_covariates_scaled = covariates_scaler.transform(test_covariates) if has_input_covariates else [None] * len(test_targets)
     test_past_covariates_scaled = past_covariates_scaler.transform(test_past_covariates) if has_past_covariates else [None] * len(test_targets)
 
-    INPUT_CHUNK_LENGTHS = [30, 60]
-    OUTPUT_CHUNK_LENGTHS = [30, 60]
-
+    INPUT_CHUNK_LENGTHS = [60, 120]
+    OUTPUT_CHUNK_LENGTHS = [15, 30, 60]
     all_results = []
     best_models_dict = {}
     true_windows_for_chunk = []
@@ -259,14 +258,14 @@ if __name__ == "__main__":
                         fit_kwargs["past_covariates"] = train_past_covariates_scaled
                         fit_kwargs["val_past_covariates"] = val_past_covariates_scaled
                     model.fit(**fit_kwargs)
-                elif name in MODELS_PAST_COVARIATES_ONLY:
+                elif name in MODELS_FUTURE_COVARIATES_ONLY:
                     fit_kwargs = dict(
                         series=train_targets_scaled,
                         val_series=val_targets_scaled,
                     )
-                    if has_past_covariates:
-                        fit_kwargs["past_covariates"] = train_past_covariates_scaled
-                        fit_kwargs["val_past_covariates"] = val_past_covariates_scaled
+                    if has_input_covariates:
+                        fit_kwargs["future_covariates"] = train_covariates_scaled
+                        fit_kwargs["val_future_covariates"] = val_covariates_scaled
                     model.fit(**fit_kwargs)
                 else:
                     try:
@@ -312,8 +311,9 @@ if __name__ == "__main__":
                                 predict_kwargs["future_covariates"] = [train_covariates_scaled[idx] for idx in selected_indices]
                             if has_past_covariates:
                                 predict_kwargs["past_covariates"] = [train_past_covariates_scaled[idx] for idx in selected_indices]
-                        elif name in MODELS_PAST_COVARIATES_ONLY and has_past_covariates:
-                            predict_kwargs["past_covariates"] = [train_past_covariates_scaled[idx] for idx in selected_indices]
+                        elif name in MODELS_FUTURE_COVARIATES_ONLY:
+                            if has_input_covariates:
+                                predict_kwargs["future_covariates"] = [train_covariates_scaled[idx] for idx in selected_indices]
 
                         train_preds_scaled = model.predict(**predict_kwargs)
 
@@ -367,14 +367,14 @@ if __name__ == "__main__":
                             if has_past_covariates and ts_past_cov is not None:
                                 predict_kwargs["past_covariates"] = ts_past_cov
                             pred_scaled = model.predict(**predict_kwargs)
-                        elif name in MODELS_PAST_COVARIATES_ONLY:
+                        elif name in MODELS_FUTURE_COVARIATES_ONLY:
                             predict_kwargs = dict(
                                 n=OUTPUT_CHUNK_LENGTH,
                                 series=y_train,
                                 verbose=False,
                             )
-                            if has_past_covariates and ts_past_cov is not None:
-                                predict_kwargs["past_covariates"] = ts_past_cov
+                            if has_input_covariates and ts_cov is not None:
+                                predict_kwargs["future_covariates"] = ts_cov
                             pred_scaled = model.predict(**predict_kwargs)
                         elif name in NAIVE_MODELS:
                             model.fit(y_train)

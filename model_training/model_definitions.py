@@ -7,19 +7,23 @@ from darts.models import (
     NaiveSeasonal,
     LinearRegressionModel,
     NeuralForecastModel,
+    RNNModel,
+    DLinearModel,
+    NLinearModel,
+    XGBModel,
 )
-from sklearn.linear_model import Lasso
 from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import Callback
 import matplotlib.pyplot as plt
 import os
+
 from config import INPUT_COLS, PAST_COLS
-from neuralforecast.losses.pytorch import MAPE
+from neuralforecast.losses.pytorch import RMSE
 
 NAIVE_MODELS = ["NaiveLastValue"]
-MODELS_WITH_FUTURE_COVARIATES = ["LinearRegression", "Lasso", "NeuralForecast_Nhits", "NeuralForecast_NLinear", "NeuralForecast_DLinear", "NeuralForecast_TFT", "NeuralForecast_TSMixer", "Darts_Nhits", "Darts_TSMixer"]
-MODELS_PAST_COVARIATES_ONLY = []
-CHECKPOINT_MODELS = ["NeuralForecast_Nhits", "NeuralForecast_NLinear", "NeuralForecast_DLinear", "NeuralForecast_TFT", "NeuralForecast_TSMixer", "Darts_Nhits", "Darts_TSMixer"]
+MODELS_WITH_FUTURE_COVARIATES = ["LinearRegression", "Lasso", "NeuralForecast_Nhits", "NeuralForecast_NLinear", "NeuralForecast_DLinear", "NeuralForecast_TFT", "NeuralForecast_TSMixer", "NeuralForecast_PatchTST", "NeuralForecast_XLinear", "NeuralForecast_xLSTM", "NeuralForecast_RNN", "NeuralForecast_BiTCN", "Darts_XGB", "Darts_DLinear", "Darts_NLinear", "Darts_Nhits", "Darts_TSMixer"]
+MODELS_FUTURE_COVARIATES_ONLY = ["NeuralForecast_TimesNet"]
+CHECKPOINT_MODELS = ["NeuralForecast_Nhits", "NeuralForecast_NLinear", "NeuralForecast_DLinear", "NeuralForecast_TFT", "NeuralForecast_TSMixer", "NeuralForecast_PatchTST", "NeuralForecast_XLinear", "NeuralForecast_xLSTM", "NeuralForecast_TimesNet", "NeuralForecast_RNN", "NeuralForecast_BiTCN", "Darts_DLinear", "Darts_NLinear", "Darts_Nhits", "Darts_TSMixer", "Darts_RNN"]
 
 class LossPlotCallback(Callback):
     def __init__(self, model_name, save_dir):
@@ -88,6 +92,60 @@ def get_models(input_chunk_length: int, output_chunk_length: int) -> dict:
     models = {
         "NaiveLastValue": NaiveSeasonal(K=1),
         "LinearRegression": LinearRegressionModel(**linear_regression_kwargs),
+        "Darts_XGB": XGBModel(
+            model_name=f"Darts_XGB_I{input_chunk_length}_O{output_chunk_length}",
+            **linear_regression_kwargs,
+        ),
+        "Darts_DLinear": DLinearModel(
+            model_name=f"Darts_DLinear_I{input_chunk_length}_O{output_chunk_length}",
+            save_checkpoints=True,
+            force_reset=True,
+            input_chunk_length=input_chunk_length,
+            output_chunk_length=output_chunk_length,
+            n_epochs=20,
+            batch_size=128,
+            optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
+            pl_trainer_kwargs={
+                "logger": CSVLogger(f"outputs/logs/I{input_chunk_length}_O{output_chunk_length}", name="DARTS_DLINEAR"),
+                "callbacks": [LossPlotCallback("DARTS_DLINEAR", f"outputs/logs/I{input_chunk_length}_O{output_chunk_length}/plots")],
+                "log_every_n_steps": 1,
+                "enable_model_summary": False,
+            },
+        ),
+        "Darts_NLinear": NLinearModel(
+            model_name=f"Darts_NLinear_I{input_chunk_length}_O{output_chunk_length}",
+            save_checkpoints=True,
+            force_reset=True,
+            input_chunk_length=input_chunk_length,
+            output_chunk_length=output_chunk_length,
+            n_epochs=20,
+            batch_size=128,
+            optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
+            pl_trainer_kwargs={
+                "logger": CSVLogger(f"outputs/logs/I{input_chunk_length}_O{output_chunk_length}", name="DARTS_NLINEAR"),
+                "callbacks": [LossPlotCallback("DARTS_NLINEAR", f"outputs/logs/I{input_chunk_length}_O{output_chunk_length}/plots")],
+                "log_every_n_steps": 1,
+                "enable_model_summary": False,
+            },
+        ),
+        "NeuralForecast_BiTCN": NeuralForecastModel(
+            model_name=f"NeuralForecast_BiTCN_I{input_chunk_length}_O{output_chunk_length}",
+            model="BiTCN",
+            save_checkpoints=True,
+            force_reset=True,
+            input_chunk_length=input_chunk_length,
+            output_chunk_length=output_chunk_length,
+            loss_fn=RMSE(),
+            n_epochs=20,
+            batch_size=128,
+            optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
+            pl_trainer_kwargs={
+                "logger": CSVLogger(f"outputs/logs/I{input_chunk_length}_O{output_chunk_length}", name="NF_BITCN"),
+                "callbacks": [LossPlotCallback("NF_BITCN", f"outputs/logs/I{input_chunk_length}_O{output_chunk_length}/plots")],
+                "log_every_n_steps": 1,
+                "enable_model_summary": False,
+            },
+        ),
         "NeuralForecast_TSMixer": NeuralForecastModel(
             model_name=f"NeuralForecast_TSMixer_I{input_chunk_length}_O{output_chunk_length}",
             model="TSMixerx",
@@ -95,8 +153,8 @@ def get_models(input_chunk_length: int, output_chunk_length: int) -> dict:
             force_reset=True,
             input_chunk_length=input_chunk_length,
             output_chunk_length=output_chunk_length,
-            loss_fn=MAPE(),
-            n_epochs=5,
+            loss_fn=RMSE(),
+            n_epochs=20,
             batch_size=128,
             optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
             pl_trainer_kwargs={
@@ -113,13 +171,31 @@ def get_models(input_chunk_length: int, output_chunk_length: int) -> dict:
             force_reset=True,
             input_chunk_length=input_chunk_length,
             output_chunk_length=output_chunk_length,
-            loss_fn=MAPE(),
-            n_epochs=5,
+            loss_fn=RMSE(),
+            n_epochs=20,
             batch_size=128,
             optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
             pl_trainer_kwargs={
                 "logger": CSVLogger(f"outputs/logs/I{input_chunk_length}_O{output_chunk_length}", name="NF_NHITS"),
                 "callbacks": [LossPlotCallback("NF_NHITS", f"outputs/logs/I{input_chunk_length}_O{output_chunk_length}/plots")],
+                "log_every_n_steps": 1,
+                "enable_model_summary": False,
+            }
+        ),
+        "NeuralForecast_XLinear": NeuralForecastModel(
+            model_name=f"NeuralForecast_XLinear_I{input_chunk_length}_O{output_chunk_length}",
+            model="XLinear",
+            save_checkpoints=True,
+            force_reset=True,
+            input_chunk_length=input_chunk_length,
+            output_chunk_length=output_chunk_length,
+            loss_fn=RMSE(),
+            n_epochs=20,
+            batch_size=128,
+            optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
+            pl_trainer_kwargs={
+                "logger": CSVLogger(f"outputs/logs/I{input_chunk_length}_O{output_chunk_length}", name="NF_XLINEAR"),
+                "callbacks": [LossPlotCallback("NF_XLINEAR", f"outputs/logs/I{input_chunk_length}_O{output_chunk_length}/plots")],
                 "log_every_n_steps": 1,
                 "enable_model_summary": False,
             }

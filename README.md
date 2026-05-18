@@ -39,3 +39,27 @@ python data_functionalities/correlation_granger.py \
 
 - If `--x-col` and `--y-col` are omitted, pairs are generated as `INPUT_COLS × TARGET_COLS` from `config.py`.
 - Use small `--max-lag` first for faster runtime.
+
+## Darts Training Pipeline
+
+Script: `train_darts_pipeline.py`
+
+Trains Darts models on all CSV files in `data_preprocessed`, treating each
+`session_index` as a separate series. Uses `PAST_COLS` as past covariates,
+`INPUT_COLS` as future covariates, and `TARGET_COLS` as targets.
+
+### Example
+
+```bash
+python train_darts_pipeline.py \
+  --input-chunk-length 120 \
+  --output-chunk-length 30 \
+  --models NeuralForecast_TSMixer,LinearRegression \
+  --val-ratio 0.2 \
+  --save-dir outputs/models
+```
+
+### Notes
+
+- Use `--max-files` for a quick sanity run.
+- Models are created via `model_training/model_definitions.py`.

@@ -1,8 +1,6 @@
 PAST_COLS = [
     "clinker_1_feedrate",
     "clinker_2_feedrate",
-    "stone_slag_feedrate",
-    "gypsum_feedrate",
     "ashes_feedrate",
     "iron_sulfate",
     "glycol",
@@ -10,20 +8,12 @@ PAST_COLS = [
     "mill_output_temp",
     "mill_input_temp",
     "output_vacuum",
-    "output_gas_flow",
-    "first_chamber_filling",
-    "second_chamber_filling",
     "elevator_1_load",
     "deduster_vacuum",
     "separator_load",
-    "separator_speed",
     "separator_output_temp",
     "separator_input_temp",
-    "return",
-    "circulation_fan_speed",
     "filter_fan_speed",
-    "aspiration_fan_speed",
-    "fresh_air_flap_position",
     "auger_5_load",
     "gran1_obscuration",
     "gran1_dv_10",
@@ -34,7 +24,6 @@ PAST_COLS = [
     "gran1_vol_lt_32_um",
     "gran1_vol_in_5_50_um",
     "gran1_cv",
-    "gran1_blain",
     "gran1_davg_vol",
     "gran1_davg_surf",
     "gran1_vol_lt_5_um",
@@ -80,19 +69,20 @@ PAST_COLS = [
 
 
 INPUT_COLS = [
-    "fresh_feed_setpoint",
-    "stone_slag_feedrate_setpoint",
-    "aspiration_fan_speed_setpoint",
-    "gypsum_feedrate_setpoint",
-    "circulation_fan_speed_setpoint",
-    "fresh_air_flap_position_setpoint",
-    "separator_speed_setpoint"
+    # "fresh_feed",
+    "input_sum",
+    "stone_slag_feedrate",
+    "aspiration_fan_speed",
+    "gypsum_feedrate",
+    "circulation_fan_speed",
+    "fresh_air_flap_position",
+    "separator_speed"
 ]
 
 TARGET_COLS = [
-    # "return",
-    # "first_chamber_filling",
-    # "second_chamber_filling",
+    "return",
+    "first_chamber_filling",
+    "second_chamber_filling",
     "gran1_blain",
 ]
 
