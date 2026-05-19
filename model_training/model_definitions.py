@@ -7,7 +7,6 @@ from darts.models import (
     NaiveSeasonal,
     LinearRegressionModel,
     NeuralForecastModel,
-    RNNModel,
     DLinearModel,
     NLinearModel,
     XGBModel,
