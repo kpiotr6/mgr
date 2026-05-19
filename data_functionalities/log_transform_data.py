@@ -81,7 +81,7 @@ def log_transform_timeseries(
         if store_params:
             _log_transform_storage.store_params(ts_idx, params_dict)
 
-        transformed.append(TimeSeries.from_dataframe(transformed_df))
+        transformed.append(TimeSeries.from_dataframe(transformed_df.astype("float64")))
 
     return transformed
 
@@ -114,7 +114,7 @@ def reverse_log_transform_timeseries(ts_list: List[TimeSeries], ts_indices: List
             shift = float(params.get("shift", 0.0))
             reversed_df[col] = np.expm1(df[col].values) - shift
 
-        reversed_list.append(TimeSeries.from_dataframe(reversed_df))
+        reversed_list.append(TimeSeries.from_dataframe(reversed_df.astype("float64")))
 
     return reversed_list
 

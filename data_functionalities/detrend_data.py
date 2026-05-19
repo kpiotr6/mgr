@@ -82,7 +82,7 @@ def detrend_timeseries_linear(ts_list: List[TimeSeries], store_trends: bool = Tr
             _detrend_storage.store_trend(ts_idx, trends_dict)
 
         # Convert back to TimeSeries
-        detrended_ts = TimeSeries.from_dataframe(detrended_df)
+        detrended_ts = TimeSeries.from_dataframe(detrended_df.astype("float64"))
         detrended.append(detrended_ts)
 
     return detrended
@@ -127,7 +127,7 @@ def detrend_timeseries_polynomial(ts_list: List[TimeSeries], order: int = 2, sto
             _detrend_storage.store_trend(ts_idx, trends_dict)
 
         # Convert back to TimeSeries
-        detrended_ts = TimeSeries.from_dataframe(detrended_df)
+        detrended_ts = TimeSeries.from_dataframe(detrended_df.astype("float64"))
         detrended.append(detrended_ts)
 
     return detrended
@@ -171,7 +171,7 @@ def detrend_timeseries_constant(ts_list: List[TimeSeries], store_trends: bool = 
             _detrend_storage.store_trend(ts_idx, trends_dict)
 
         # Convert back to TimeSeries
-        detrended_ts = TimeSeries.from_dataframe(detrended_df)
+        detrended_ts = TimeSeries.from_dataframe(detrended_df.astype("float64"))
         detrended.append(detrended_ts)
 
     return detrended
@@ -213,7 +213,7 @@ def reverse_detrend_timeseries(ts_list: List[TimeSeries], ts_indices: List[int] 
 
                 retrended_df[col] = retrended_values
 
-        retrended_ts = TimeSeries.from_dataframe(retrended_df)
+        retrended_ts = TimeSeries.from_dataframe(retrended_df.astype("float64"))
         retrended.append(retrended_ts)
 
     return retrended

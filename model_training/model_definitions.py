@@ -92,10 +92,6 @@ def get_models(input_chunk_length: int, output_chunk_length: int) -> dict:
     models = {
         "NaiveLastValue": NaiveSeasonal(K=1),
         "LinearRegression": LinearRegressionModel(**linear_regression_kwargs),
-        "Darts_XGB": XGBModel(
-            model_name=f"Darts_XGB_I{input_chunk_length}_O{output_chunk_length}",
-            **linear_regression_kwargs,
-        ),
         "Darts_DLinear": DLinearModel(
             model_name=f"Darts_DLinear_I{input_chunk_length}_O{output_chunk_length}",
             save_checkpoints=True,
@@ -104,6 +100,7 @@ def get_models(input_chunk_length: int, output_chunk_length: int) -> dict:
             output_chunk_length=output_chunk_length,
             n_epochs=20,
             batch_size=128,
+            loss_fn=RMSE(),
             optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
             pl_trainer_kwargs={
                 "logger": CSVLogger(f"outputs/logs/I{input_chunk_length}_O{output_chunk_length}", name="DARTS_DLINEAR"),
@@ -120,6 +117,7 @@ def get_models(input_chunk_length: int, output_chunk_length: int) -> dict:
             output_chunk_length=output_chunk_length,
             n_epochs=20,
             batch_size=128,
+            loss_fn=RMSE(),
             optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
             pl_trainer_kwargs={
                 "logger": CSVLogger(f"outputs/logs/I{input_chunk_length}_O{output_chunk_length}", name="DARTS_NLINEAR"),

@@ -63,3 +63,31 @@ python train_darts_pipeline.py \
 
 - Use `--max-files` for a quick sanity run.
 - Models are created via `model_training/model_definitions.py`.
+
+## Linear Regression Forward Selection
+
+Script: `model_training/train_linear_regression_forward_selection.py`
+
+Runs forward selection over `PAST_COLS` and `INPUT_COLS` to pick covariate subsets
+for a Darts `LinearRegressionModel` with backward (past) and forward (future) windows.
+
+### Example
+
+```bash
+python model_training/train_linear_regression_forward_selection.py \
+  --input-chunk-length 60 \
+  --output-chunk-length 30 \
+  --input-chunk-lengths 60,120 \
+  --output-chunk-lengths 15,30 \
+  --max-features 10 \
+  --min-improvement 1e-4 \
+  --shuffle \
+  --output-dir outputs
+```
+
+### Outputs
+
+- `outputs/linear_regression_forward_selection_steps_<target>_I<in>_O<out>.csv`
+  - incremental feature additions with validation RMSE for each target and length pair.
+- `outputs/linear_regression_forward_selection_summary.csv`
+  - final selected covariates and best validation RMSE for all targets and length pairs.
