@@ -10,12 +10,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from config import INPUT_COLS, PAST_COLS, SESSION_COL, TARGET_COLS, TIME_COL
+from config import INPUT_COLS, PAST_COLS, SESSION_COL, STATIC_COLS, TARGET_COLS, TIME_COL
 
 
 def _build_output_columns() -> list[str]:
     output_columns: list[str] = [SESSION_COL, TIME_COL]
-    for column in INPUT_COLS + PAST_COLS + TARGET_COLS:
+    for column in INPUT_COLS + PAST_COLS + STATIC_COLS + TARGET_COLS:
         if column not in output_columns:
             output_columns.append(column)
     return output_columns

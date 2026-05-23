@@ -1,7 +1,7 @@
 import pandas as pd
 import argparse
 from darts import TimeSeries
-from darts.dataprocessing.transformers import Scaler
+from darts.dataprocessing.transformers import Scaler, StaticCovariatesTransformer
 from darts.metrics import mae, rmse, mape
 import os
 import sys
@@ -19,7 +19,7 @@ logging.getLogger("pytorch_lightning.accelerators.cuda").setLevel(logging.ERROR)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
-from config import INPUT_COLS, PAST_COLS, TARGET_COLS, TIME_COL, PER_TARGET_CONFIG
+from config import INPUT_COLS, PAST_COLS, TARGET_COLS, TIME_COL, PER_TARGET_CONFIG, STATIC_COLS
 
 from data_functionalities.detrend_data import (
     detrend_timeseries_linear,
@@ -40,7 +40,14 @@ from model_definitions import (
 )
 
 
-def load_data(filepath: str, target_cols: list[str], input_cols: list[str], past_cols: list[str]):
+def load_data(
+    filepath: str,
+    target_cols: list[str],
+    input_cols: list[str],
+    past_cols: list[str],
+    static_cols: list[str],
+    static_covariate_columns: list[str] | None,
+):
     df = pd.read_csv(filepath)
     df[TIME_COL] = pd.to_datetime(df[TIME_COL])
 
@@ -53,6 +60,7 @@ def load_data(filepath: str, target_cols: list[str], input_cols: list[str], past
 
     has_input_covariates = len(input_cols) > 0
     has_past_covariates = len(past_cols) > 0
+    has_static_covariates = len(static_cols) > 0
 
     for _, group_df in df.groupby(group_id):
         group_df = group_df.sort_values(TIME_COL).drop_duplicates(subset=[TIME_COL])
@@ -60,11 +68,17 @@ def load_data(filepath: str, target_cols: list[str], input_cols: list[str], past
         if len(group_df) < 720:
             continue
 
+        static_covariates = None
+        if has_static_covariates:
+            static_values = group_df[static_cols].iloc[[0]].copy()
+            static_covariates = static_values
+
         # Create targets TimeSeries
         target_ts = TimeSeries.from_dataframe(
             group_df,
             time_col=TIME_COL,
             value_cols=target_cols,
+            static_covariates=static_covariates,
         )
         targets.append(target_ts)
 
@@ -95,6 +109,7 @@ def run_training(
     target_cols: list[str],
     input_cols: list[str],
     past_cols: list[str],
+    static_cols: list[str],
     run_tag: str,
     use_detrend: bool,
     use_log_transform: bool,
@@ -103,6 +118,7 @@ def run_training(
 ):
     has_input_covariates = len(input_cols) > 0
     has_past_covariates = len(past_cols) > 0
+    has_static_covariates = len(static_cols) > 0
 
     targets_list = []
     covariates_list = []
@@ -114,8 +130,17 @@ def run_training(
     if max_files_to_load is not None:
         all_files = all_files[:max_files_to_load]
 
+    static_covariate_columns = None
+
     for filepath in all_files:
-        t, c, p = load_data(filepath, target_cols, input_cols, past_cols)
+        t, c, p = load_data(
+            filepath,
+            target_cols,
+            input_cols,
+            past_cols,
+            static_cols,
+            static_covariate_columns,
+        )
         targets_list.extend(t)
         covariates_list.extend(c)
         past_covariates_list.extend(p)
@@ -194,6 +219,16 @@ def run_training(
     test_covariates_scaled = covariates_scaler.transform(test_covariates) if has_input_covariates else [None] * len(test_targets)
     test_past_covariates_scaled = past_covariates_scaler.transform(test_past_covariates) if has_past_covariates else [None] * len(test_targets)
 
+    if has_static_covariates:
+        static_covariates_transformer = StaticCovariatesTransformer()
+        train_targets_scaled_lr = static_covariates_transformer.fit_transform(train_targets_scaled)
+        val_targets_scaled_lr = static_covariates_transformer.transform(val_targets_scaled)
+        test_targets_scaled_lr = static_covariates_transformer.transform(test_targets_scaled)
+    else:
+        train_targets_scaled_lr = train_targets_scaled
+        val_targets_scaled_lr = val_targets_scaled
+        test_targets_scaled_lr = test_targets_scaled
+
     input_chunk_lengths = [60, 120]
     output_chunk_lengths = [15, 30, 60]
     all_results = []
@@ -212,12 +247,21 @@ def run_training(
             for name, model in models.items():
                 print(f"\n[{run_tag}] Training {name}...")
 
+                if name == "LinearRegression":
+                    model_train_targets = train_targets_scaled_lr
+                    model_val_targets = val_targets_scaled_lr
+                    model_test_targets = test_targets_scaled_lr
+                else:
+                    model_train_targets = train_targets_scaled
+                    model_val_targets = val_targets_scaled
+                    model_test_targets = test_targets_scaled
+
                 if name in NAIVE_MODELS:
                     pass
                 elif name in MODELS_WITH_FUTURE_COVARIATES:
                     fit_kwargs = dict(
-                        series=train_targets_scaled,
-                        val_series=val_targets_scaled,
+                        series=model_train_targets,
+                        val_series=model_val_targets,
                     )
                     if has_input_covariates:
                         fit_kwargs["future_covariates"] = train_covariates_scaled
@@ -228,8 +272,8 @@ def run_training(
                     model.fit(**fit_kwargs)
                 elif name in MODELS_FUTURE_COVARIATES_ONLY:
                     fit_kwargs = dict(
-                        series=train_targets_scaled,
-                        val_series=val_targets_scaled,
+                        series=model_train_targets,
+                        val_series=model_val_targets,
                     )
                     if has_input_covariates:
                         fit_kwargs["future_covariates"] = train_covariates_scaled
@@ -238,8 +282,8 @@ def run_training(
                 else:
                     try:
                         model.fit(
-                            series=train_targets_scaled,
-                            val_series=val_targets_scaled
+                            series=model_train_targets,
+                            val_series=model_val_targets
                         )
                     except Exception as e:
                         print(f"[{run_tag}] Error training {name}: {e}")
@@ -257,11 +301,11 @@ def run_training(
                 if name not in NAIVE_MODELS:
                     try:
                         selected_indices = [
-                            idx for idx, t in enumerate(train_targets_scaled)
+                            idx for idx, t in enumerate(model_train_targets)
                             if len(t) > input_chunk_length + output_chunk_length
                         ]
                         train_series_for_pred = [
-                            train_targets_scaled[idx][:-output_chunk_length]
+                            model_train_targets[idx][:-output_chunk_length]
                             for idx in selected_indices
                         ]
 
@@ -303,7 +347,7 @@ def run_training(
                 all_preds = []
 
                 for ts_target, ts_cov, ts_past_cov, ts_target_raw, ts_original_idx in zip(
-                    test_targets_scaled, test_covariates_scaled, test_past_covariates_scaled, test_targets_raw, test_series_indices
+                    model_test_targets, test_covariates_scaled, test_past_covariates_scaled, test_targets_raw, test_series_indices
                 ):
                     max_input_chunk_length = max(input_chunk_lengths)
                     if len(ts_target) <= max_input_chunk_length + output_chunk_length:
@@ -456,6 +500,7 @@ if __name__ == "__main__":
         target_cols=TARGET_COLS,
         input_cols=INPUT_COLS,
         past_cols=PAST_COLS,
+        static_cols=STATIC_COLS,
         run_tag="all_targets",
         use_detrend=use_detrend,
         use_log_transform=use_log_transform,
@@ -468,6 +513,7 @@ if __name__ == "__main__":
             target_cols=[target],
             input_cols=cfg.get("input", []),
             past_cols=cfg.get("past", []),
+            static_cols=cfg.get("static", STATIC_COLS),
             run_tag=f"target_{target}",
             use_detrend=use_detrend,
             use_log_transform=use_log_transform,
