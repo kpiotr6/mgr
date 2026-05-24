@@ -9,6 +9,8 @@ import glob
 import random
 import warnings
 import logging
+import pickle
+from pathlib import Path
 
 warnings.filterwarnings("ignore")
 logging.getLogger("pytorch_lightning").setLevel(logging.ERROR)
@@ -207,6 +209,29 @@ def run_training(
     covariates_scaler = Scaler(global_fit=True) if has_input_covariates else None
     past_covariates_scaler = Scaler(global_fit=True) if has_past_covariates else None
 
+    def persist_scalers(model_name: str) -> None:
+        """Save scalers next to the Darts checkpoint folder.
+
+        MPC/inference relies on `darts_logs/<model_name>/scalers.pkl`.
+        """
+
+        out_path = Path("darts_logs") / model_name / "scalers.pkl"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        bundle = {
+            "target_scaler": target_scaler,
+            "covariates_scaler": covariates_scaler,
+            "past_covariates_scaler": past_covariates_scaler,
+            "meta": {
+                "target_cols": list(target_cols),
+                "input_cols": list(input_cols),
+                "past_cols": list(past_cols),
+                "static_cols": list(static_cols),
+                "run_tag": run_tag,
+            },
+        }
+        with out_path.open("wb") as f:
+            pickle.dump(bundle, f)
+
     train_targets_scaled = target_scaler.fit_transform(train_targets)
     train_covariates_scaled = covariates_scaler.fit_transform(train_covariates) if has_input_covariates else [None] * len(train_targets)
     train_past_covariates_scaled = past_covariates_scaler.fit_transform(train_past_covariates) if has_past_covariates else [None] * len(train_targets)
@@ -246,6 +271,10 @@ def run_training(
 
             for name, model in models.items():
                 print(f"\n[{run_tag}] Training {name}...")
+
+                if name in CHECKPOINT_MODELS:
+                    # Ensure scalers are persisted in the corresponding checkpoint directory.
+                    persist_scalers(f"{name}_I{input_chunk_length}_O{output_chunk_length}")
 
                 if name == "LinearRegression":
                     model_train_targets = train_targets_scaled_lr

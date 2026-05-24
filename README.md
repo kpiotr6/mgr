@@ -1,5 +1,16 @@
 # Time-Series Utilities
 
+## Cement Mill Simulator GUI
+
+Script: `mpc/simulator_gui.py`
+
+Runs a real-time simulator with sliders for fresh feed, separator speed,
+and raw clinker Blaine.
+
+```bash
+streamlit run mpc/simulator_gui.py
+```
+
 ## Cross-Correlation + Granger Causality
 
 Script: `data_functionalities/correlation_granger.py`
@@ -63,6 +74,21 @@ python train_darts_pipeline.py \
 
 - Use `--max-files` for a quick sanity run.
 - Models are created via `model_training/model_definitions.py`.
+
+## Min/Max Summary for Preprocessed Data
+
+Script: `find_min_max_preprocessed.py`
+
+Computes global per-column min and max values across all numeric columns
+in `data_preprocessed` and saves a summary CSV.
+
+### Example
+
+```bash
+python find_min_max_preprocessed.py \
+  --input-dir data_preprocessed \
+  --output-file outputs/min_max_data_preprocessed.csv
+```
 
 ## Linear Regression Forward Selection
 

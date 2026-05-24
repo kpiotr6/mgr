@@ -1,0 +1,5 @@
+Target,BestModel,BestMAPE,InputChunkLength,OutputChunkLength,SourceFile
+first_chamber_filling,NeuralForecast_XLinear,0.3136896609216774,60,15,evaluation_metrics_target_first_chamber_filling.csv
+gran1_blain,NeuralForecast_TSMixer,0.173227766500201,120,15,evaluation_metrics_target_gran1_blain.csv
+return,LinearRegression,1.534511895833002,120,60,evaluation_metrics_target_return.csv
+second_chamber_filling,NeuralForecast_XLinear,0.7294638955426267,60,15,evaluation_metrics_target_second_chamber_filling.csv
