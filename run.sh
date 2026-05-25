@@ -7,6 +7,6 @@
 #SBATCH --mem=40G
 #SBATCH --gres=gpu
 
-module add python/3.13.5-gcccore-14.3.0
+module add GCCcore/14.3.0 Python/3.13.5
 export PYTHONPATH="${PYTHONPATH}:/net/tscratch/people/plgkpiotr6/pip/mgr"
 python model_training/train_models.py
