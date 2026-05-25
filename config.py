@@ -146,9 +146,6 @@ PER_TARGET_CONFIG = {
       "input_sum",
       "separator_speed",
       "stone_slag_feedrate"
-    ],
-    "static": [
-      "cement_id"
     ]
   },
   "second_chamber_filling": {
@@ -169,9 +166,6 @@ PER_TARGET_CONFIG = {
       "circulation_fan_speed",
       "separator_speed",
       "stone_slag_feedrate"
-    ],
-    "static": [
-      "cement_id"
     ]
   }
 }
@@ -186,10 +180,6 @@ INPUT_COLS = [
     "circulation_fan_speed",
     "fresh_air_flap_position",
     "separator_speed"
-]
-
-STATIC_COLS = [
-    "cement_id",
 ]
 
 TARGET_COLS = [
