@@ -11,6 +11,7 @@ import random
 import sys
 import warnings
 from typing import List, Optional, Tuple
+from pathlib import Path
 
 import pandas as pd
 from darts import TimeSeries
@@ -23,16 +24,17 @@ logging.getLogger("pytorch_lightning").setLevel(logging.ERROR)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").setLevel(logging.ERROR)
 logging.getLogger("pytorch_lightning.accelerators.cuda").setLevel(logging.ERROR)
 
-# Add current directory to path for local imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 
 from config import INPUT_COLS, PAST_COLS, TARGET_COLS, TIME_COL
-from data_functionalities.detrend_data import (
+from .detrend_data import (
     detrend_timeseries_linear,
     reset_detrend_storage,
 )
-from data_functionalities.log_transform_data import (
+from .log_transform_data import (
     log_transform_timeseries,
     reset_log_transform_storage,
 )

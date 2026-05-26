@@ -16,7 +16,6 @@ from pytorch_lightning.callbacks import Callback
 import matplotlib.pyplot as plt
 import os
 
-from config import INPUT_COLS, PAST_COLS
 from neuralforecast.losses.pytorch import RMSE
 
 NAIVE_MODELS = ["NaiveLastValue"]
@@ -60,7 +59,12 @@ class LossPlotCallback(Callback):
         plt.savefig(os.path.join(self.save_dir, f'{self.model_name}_val_loss.png'))
         plt.close()
 
-def get_models(input_chunk_length: int, output_chunk_length: int) -> dict:
+def get_models(
+    input_chunk_length: int,
+    output_chunk_length: int,
+    input_cols: list[str] | None = None,
+    past_cols: list[str] | None = None,
+) -> dict:
     """
     Create and return a dictionary of models with specified input/output chunk lengths.
 
@@ -76,8 +80,11 @@ def get_models(input_chunk_length: int, output_chunk_length: int) -> dict:
     dict
         Dictionary mapping model names to model instances
     """
-    has_input_covariates = len(INPUT_COLS) > 0
-    has_past_covariates = len(PAST_COLS) > 0
+    input_cols = input_cols or []
+    past_cols = past_cols or []
+
+    has_input_covariates = len(input_cols) > 0
+    has_past_covariates = len(past_cols) > 0
 
     linear_regression_kwargs = {
         "lags": input_chunk_length,
@@ -99,7 +106,7 @@ def get_models(input_chunk_length: int, output_chunk_length: int) -> dict:
             input_chunk_length=input_chunk_length,
             output_chunk_length=output_chunk_length,
             loss_fn=RMSE(),
-            n_epochs=20,
+            n_epochs=3,
             batch_size=128,
             optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
             pl_trainer_kwargs={
@@ -117,7 +124,7 @@ def get_models(input_chunk_length: int, output_chunk_length: int) -> dict:
             input_chunk_length=input_chunk_length,
             output_chunk_length=output_chunk_length,
             loss_fn=RMSE(),
-            n_epochs=20,
+            n_epochs=3,
             batch_size=128,
             optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
             pl_trainer_kwargs={
@@ -135,7 +142,7 @@ def get_models(input_chunk_length: int, output_chunk_length: int) -> dict:
             input_chunk_length=input_chunk_length,
             output_chunk_length=output_chunk_length,
             loss_fn=RMSE(),
-            n_epochs=20,
+            n_epochs=3,
             batch_size=128,
             optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
             pl_trainer_kwargs={
@@ -153,7 +160,7 @@ def get_models(input_chunk_length: int, output_chunk_length: int) -> dict:
             input_chunk_length=input_chunk_length,
             output_chunk_length=output_chunk_length,
             loss_fn=RMSE(),
-            n_epochs=20,
+            n_epochs=3,
             batch_size=128,
             optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
             pl_trainer_kwargs={

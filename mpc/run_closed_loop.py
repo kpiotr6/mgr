@@ -2,10 +2,15 @@
 
 Example:
   python -m mpc.run_closed_loop \
-    --model-name NeuralForecast_Nhits_I60_O30 \
-    --model-class NeuralForecastModel \
+        --model-name NeuralForecast_Nhits_I60_O30 \
     --forward-horizon 30 \
     --grid-n 5
+
+Linear Regression example (model class inferred from name):
+    python -m mpc.run_closed_loop \
+        --model-name LinearRegression_I60_O30 \
+        --forward-horizon 30 \
+        --grid-n 5
 
 If `darts_logs/<model-name>/scalers.pkl` is missing, create it with:
   python -m mpc.fit_scalers \
@@ -19,15 +24,22 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 
 import numpy as np
 import pandas as pd
+
+if __package__ is None or __package__ == "":
+    # Allow running as a script: `python mpc/run_closed_loop.py ...`
+    # In that case, Python puts `.../proj/mpc` on sys.path, so `import mpc` fails.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mpc.simulator_headless import CementMillSim
 from mpc.mpc_controller import (
     CONTROL_COLS,
     TARGET_COLS,
     DartsPredictor,
+    NaivePredictor,
     DiscreteGridMPC,
     MPCConfig,
 )
@@ -56,8 +68,22 @@ def _parse_setpoints(s: str | None) -> dict[str, float] | None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model-name", required=True)
-    parser.add_argument("--model-class", default="NeuralForecastModel")
+    parser.add_argument(
+        "--predictor",
+        default="darts",
+        choices=["darts", "naive"],
+        help="Which predictor to use: 'darts' (checkpoint model) or 'naive' (hold last y constant)"
+    )
+    parser.add_argument("--model-name", default=None, help="Required when --predictor=darts")
+    default_model_class = "NeuralForecastModel"
+    parser.add_argument(
+        "--model-class",
+        default=default_model_class,
+        help=(
+            "Darts model class name (e.g. NeuralForecastModel, LinearRegressionModel). "
+            "If left at the default, LinearRegression_* model names are inferred as LinearRegressionModel."
+        ),
+    )
     parser.add_argument("--model-dir", default="darts_logs")
     parser.add_argument("--scalers-path", default=None)
 
@@ -74,19 +100,39 @@ def main() -> None:
     )
 
     parser.add_argument("--save-csv", default="outputs/mpc_closed_loop.csv")
+    parser.add_argument(
+        "--save-metrics-json",
+        default=None,
+        help="Optional path to save setpoints+tracking metrics as JSON.",
+    )
 
     args = parser.parse_args()
 
-    predictor = DartsPredictor(
-        model_name=args.model_name,
-        model_class_name=args.model_class,
-        model_dir=args.model_dir,
-        scalers_path=args.scalers_path,
-        target_cols=TARGET_COLS,
-        control_cols=CONTROL_COLS,
-    )
+    if args.predictor == "darts" and not args.model_name:
+        parser.error("--model-name is required when --predictor=darts")
 
-    warmup = int(args.warmup) if args.warmup is not None else int(predictor.input_chunk_length)
+    model_class = args.model_class
+    if args.predictor == "darts":
+        if model_class == default_model_class and str(args.model_name).startswith("LinearRegression_"):
+            model_class = "LinearRegressionModel"
+
+    if args.predictor == "naive":
+        predictor = NaivePredictor(
+            target_cols=TARGET_COLS,
+            control_cols=CONTROL_COLS,
+            input_chunk_length=60,
+        )
+    else:
+        predictor = DartsPredictor(
+            model_name=args.model_name,
+            model_class_name=model_class,
+            model_dir=args.model_dir,
+            scalers_path=args.scalers_path,
+            target_cols=TARGET_COLS,
+            control_cols=CONTROL_COLS,
+        )
+
+    warmup = int(args.warmup) if args.warmup is not None else int(getattr(predictor, "input_chunk_length", 60))
 
     sim = CementMillSim(seed=args.seed)
 
@@ -163,11 +209,35 @@ def main() -> None:
         "MAPE": mape(y_mat, sp_mat),
     }
 
+    if args.save_metrics_json:
+        metrics_payload = {
+            "setpoints": setpoints,
+            "metrics": metrics,
+            "meta": {
+                "predictor": args.predictor,
+                "model_name": args.model_name,
+                "model_class": model_class,
+                "model_dir": args.model_dir,
+                "scalers_path": args.scalers_path,
+                "forward_horizon": args.forward_horizon,
+                "steps": args.steps,
+                "warmup": warmup,
+                "grid_n": args.grid_n,
+                "seed": args.seed,
+                "save_csv": args.save_csv,
+            },
+        }
+        p = Path(args.save_metrics_json)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(metrics_payload, indent=2, sort_keys=True))
+
     print("Setpoints:")
     print(json.dumps(setpoints, indent=2, sort_keys=True))
     print("\nTracking metrics (vs setpoints):")
     print(json.dumps(metrics, indent=2, sort_keys=True))
     print(f"\nSaved trajectory CSV: {args.save_csv}")
+    if args.save_metrics_json:
+        print(f"Saved metrics JSON: {args.save_metrics_json}")
 
 
 if __name__ == "__main__":

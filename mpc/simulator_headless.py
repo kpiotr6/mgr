@@ -30,9 +30,8 @@ class CementMillSimConfig:
     k2: float = 0.3
     dt: float = 1.0
 
-    # State -> filling scaling (kept simple + bounded)
-    h1_to_filling: float = 0.5  # H1≈200 -> 100
-    h2_to_filling: float = 0.3  # H2≈333 -> 100
+    # Max holdup per compartment (tonnes). Fillings are reported as % occupied.
+    compartment_capacity_tonnes: float = 200.0
 
     # Noise
     holdup_noise_std: float = 1.2
@@ -40,7 +39,7 @@ class CementMillSimConfig:
     blain_noise_std: float = 15.0
 
     # Control bounds
-    clinker_1_feedrate_min: float = 0.0
+    clinker_1_feedrate_min: float = 2.0
     clinker_1_feedrate_max: float = 120.0
     separator_speed_min: float = 280.0
     separator_speed_max: float = 800.0
@@ -52,13 +51,15 @@ class CementMillSim:
         self.rng = np.random.default_rng(seed)
         self.reset()
 
-    def reset(self, *, H1: float = 200.0, H2: float = 333.0, time: float = 0.0) -> None:
-        self.H1 = float(H1)
-        self.H2 = float(H2)
+    def reset(self, *, H1: float = 75.0, H2: float = 75.0, time: float = 0.0) -> None:
+        cap = float(self.config.compartment_capacity_tonnes)
+        self.H1 = _clip(float(H1), 0.0, cap)
+        self.H2 = _clip(float(H2), 0.0, cap)
         self.time = float(time)
 
     def step(self, *, clinker_1_feedrate: float, separator_speed: float) -> dict[str, float]:
         cfg = self.config
+        cap = float(cfg.compartment_capacity_tonnes)
 
         F = _clip(clinker_1_feedrate, cfg.clinker_1_feedrate_min, cfg.clinker_1_feedrate_max)
         S = _clip(separator_speed, cfg.separator_speed_min, cfg.separator_speed_max)
@@ -77,19 +78,21 @@ class CementMillSim:
 
         self.H1 += dH1 * cfg.dt
         self.H2 += dH2 * cfg.dt
+        self.H1 = _clip(self.H1, 0.0, cap)
+        self.H2 = _clip(self.H2, 0.0, cap)
         self.time += cfg.dt
 
         # Blaine (synthetic relationship)
         B_clean = 2200.0 + (S_pct * 15.0) + ((self.H1 + self.H2) / (F + 1.0) * 25.0)
 
         # Noisy measurements
-        H1_noisy = max(0.0, self.H1 + self.rng.normal(0.0, cfg.holdup_noise_std))
-        H2_noisy = max(0.0, self.H2 + self.rng.normal(0.0, cfg.holdup_noise_std))
+        H1_noisy = _clip(self.H1 + self.rng.normal(0.0, cfg.holdup_noise_std), 0.0, cap)
+        H2_noisy = _clip(self.H2 + self.rng.normal(0.0, cfg.holdup_noise_std), 0.0, cap)
         R_noisy = max(0.0, R_clean + self.rng.normal(0.0, cfg.return_noise_std))
         B_noisy = B_clean + self.rng.normal(0.0, cfg.blain_noise_std)
 
-        first_chamber_filling = _clip(H1_noisy * cfg.h1_to_filling, 0.0, 100.0)
-        second_chamber_filling = _clip(H2_noisy * cfg.h2_to_filling, 0.0, 100.0)
+        first_chamber_filling = _clip((H1_noisy / cap) * 100.0, 0.0, 100.0)
+        second_chamber_filling = _clip((H2_noisy / cap) * 100.0, 0.0, 100.0)
 
         return {
             "return": float(R_noisy),

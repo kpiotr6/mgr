@@ -3,8 +3,8 @@ import argparse
 from darts import TimeSeries
 from darts.dataprocessing.transformers import Scaler
 from darts.metrics import mae, rmse, mape
-import os
 import sys
+import os
 import glob
 import random
 import warnings
@@ -17,29 +17,76 @@ logging.getLogger("pytorch_lightning").setLevel(logging.ERROR)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").setLevel(logging.ERROR)
 logging.getLogger("pytorch_lightning.accelerators.cuda").setLevel(logging.ERROR)
 
-# Add current directory to path for local imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+
+# Allow running this file directly (e.g. `python model_training/train_models.py`)
+# by ensuring the project root (where `config.py` lives) is on sys.path.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import INPUT_COLS, PAST_COLS, TARGET_COLS, TIME_COL, PER_TARGET_CONFIG
+from config import SIMPLE_MODEL_CONFIG
 
-from data_functionalities.detrend_data import (
+from model_training.detrend_data import (
     detrend_timeseries_linear,
     reverse_detrend_timeseries,
-    reset_detrend_storage
+    reset_detrend_storage,
 )
-from data_functionalities.log_transform_data import (
+from model_training.log_transform_data import (
     log_transform_timeseries,
     reverse_log_transform_timeseries,
     reset_log_transform_storage,
 )
-from model_definitions import (
+from model_training.model_definitions import (
     get_models,
     NAIVE_MODELS,
     MODELS_WITH_FUTURE_COVARIATES,
     MODELS_FUTURE_COVARIATES_ONLY,
-    CHECKPOINT_MODELS
+    CHECKPOINT_MODELS,
 )
+
+
+_MODEL_GROUPS: dict[str, set[str]] = {
+    "naive": set(NAIVE_MODELS),
+    "checkpoint": set(CHECKPOINT_MODELS),
+    "future_covariates": set(MODELS_WITH_FUTURE_COVARIATES),
+    "future_only": set(MODELS_FUTURE_COVARIATES_ONLY),
+}
+
+
+def _parse_csv_arg(value: str | None) -> set[str] | None:
+    if value is None:
+        return None
+    items = [v.strip() for v in value.split(",") if v.strip()]
+    return set(items) if items else None
+
+
+def _filter_models(
+    models: dict,
+    *,
+    include_names: set[str] | None,
+    exclude_names: set[str] | None,
+    include_groups: set[str] | None,
+) -> dict:
+    filtered = dict(models)
+
+    if include_groups:
+        known_union = set().union(*_MODEL_GROUPS.values())
+        selected: set[str] = set()
+        for g in include_groups:
+            if g == "other":
+                selected |= set(filtered.keys()) - (known_union & set(filtered.keys()))
+            else:
+                selected |= _MODEL_GROUPS[g] & set(filtered.keys())
+        filtered = {k: v for k, v in filtered.items() if k in selected}
+
+    if include_names:
+        filtered = {k: v for k, v in filtered.items() if k in include_names}
+
+    if exclude_names:
+        filtered = {k: v for k, v in filtered.items() if k not in exclude_names}
+
+    return filtered
 
 
 def load_data(
@@ -106,6 +153,9 @@ def run_training(
     use_detrend: bool,
     use_log_transform: bool,
     shuffle_data: bool,
+    model_names: set[str] | None = None,
+    exclude_model_names: set[str] | None = None,
+    model_groups: set[str] | None = None,
     max_files_to_load: int | None = None,
 ):
     has_input_covariates = len(input_cols) > 0
@@ -216,6 +266,21 @@ def run_training(
         with out_path.open("wb") as f:
             pickle.dump(bundle, f)
 
+    def persist_serialized_model(model_name: str, model_obj) -> None:
+        """Save a non-checkpoint Darts model next to `darts_logs/<model_name>/`.
+
+        `mpc/DartsPredictor` can load `_model.pth.tar` via `model_class.load()`.
+        """
+
+        out_dir = Path("darts_logs") / model_name
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / "_model.pth.tar"
+
+        if not hasattr(model_obj, "save"):
+            raise AttributeError(f"Model {type(model_obj)} has no .save() method")
+
+        model_obj.save(str(out_path))
+
     train_targets_scaled = target_scaler.fit_transform(train_targets)
     train_covariates_scaled = covariates_scaler.fit_transform(train_covariates) if has_input_covariates else [None] * len(train_targets)
     train_past_covariates_scaled = past_covariates_scaler.fit_transform(train_past_covariates) if has_past_covariates else [None] * len(train_targets)
@@ -240,15 +305,37 @@ def run_training(
             print(f"[{run_tag}] Training for INPUT_CHUNK_LENGTH={input_chunk_length}, OUTPUT_CHUNK_LENGTH={output_chunk_length}")
             print("="*50 + "\n")
 
-            models = get_models(input_chunk_length, output_chunk_length)
+            models = get_models(
+                input_chunk_length,
+                output_chunk_length,
+                input_cols=input_cols,
+                past_cols=past_cols,
+            )
+            models = _filter_models(
+                models,
+                include_names=model_names,
+                exclude_names=exclude_model_names,
+                include_groups=model_groups,
+            )
+            if not models:
+                print(
+                    f"[{run_tag}] No models selected for I{input_chunk_length}/O{output_chunk_length} (filter removed all)."
+                )
+                continue
             true_windows_for_chunk = []
 
             for name, model in models.items():
                 print(f"\n[{run_tag}] Training {name}...")
 
+                model_name_for_artifacts = f"{name}_I{input_chunk_length}_O{output_chunk_length}"
+
                 if name in CHECKPOINT_MODELS:
                     # Ensure scalers are persisted in the corresponding checkpoint directory.
-                    persist_scalers(f"{name}_I{input_chunk_length}_O{output_chunk_length}")
+                    persist_scalers(model_name_for_artifacts)
+                elif name == "LinearRegression":
+                    # LinearRegressionModel is not checkpoint-based, but MPC/inference still
+                    # expects artifacts under `darts_logs/<model_name>/`.
+                    persist_scalers(model_name_for_artifacts)
 
                 model_train_targets = train_targets_scaled
                 model_val_targets = val_targets_scaled
@@ -290,11 +377,16 @@ def run_training(
 
                 if name in CHECKPOINT_MODELS:
                     try:
-                        model_name_for_load = f"{name}_I{input_chunk_length}_O{output_chunk_length}"
-                        model = type(model).load_from_checkpoint(model_name=model_name_for_load, best=True)
+                        model = type(model).load_from_checkpoint(model_name=model_name_for_artifacts, best=True)
                         print(f"[{run_tag}] Loaded best checkpoint for {name}.")
                     except Exception as e:
                         print(f"[{run_tag}] Could not load best checkpoint for {name}: {e}")
+                elif name == "LinearRegression":
+                    try:
+                        persist_serialized_model(model_name_for_artifacts, model)
+                        print(f"[{run_tag}] Saved serialized model for {name} to darts_logs/{model_name_for_artifacts}/_model.pth.tar")
+                    except Exception as e:
+                        print(f"[{run_tag}] Could not save serialized model for {name}: {e}")
 
                 if name not in NAIVE_MODELS:
                     try:
@@ -442,9 +534,9 @@ def run_training(
                     all_results.append(res_dict)
 
                     model_key = f"{name}_I{input_chunk_length}_O{output_chunk_length}"
-                    if model_key not in best_models_dict or avg_mae < best_models_dict[model_key]['mae']:
+                    if model_key not in best_models_dict or avg_mape < best_models_dict[model_key]['mape']:
                         best_models_dict[model_key] = {
-                            'mae': avg_mae,
+                            'mape': avg_mape,
                             'model': model,
                             'i': input_chunk_length,
                             'o': output_chunk_length,
@@ -482,6 +574,33 @@ if __name__ == "__main__":
         action="store_true",
         help="Shuffle the data blocks before train/val/test split.",
     )
+
+    parser.add_argument(
+        "--runs",
+        nargs="+",
+        choices=["all", "all_targets", "per_target", "simple"],
+        default=["all"],
+        help="Which training runs to execute (default: all).",
+    )
+    parser.add_argument(
+        "--models",
+        type=str,
+        default=None,
+        help="Comma-separated list of model names to train (e.g. 'LinearRegression,NeuralForecast_Nhits').",
+    )
+    parser.add_argument(
+        "--exclude-models",
+        type=str,
+        default=None,
+        help="Comma-separated list of model names to exclude.",
+    )
+    parser.add_argument(
+        "--model-groups",
+        nargs="+",
+        choices=["naive", "checkpoint", "future_covariates", "future_only", "other"],
+        default=None,
+        help="Train only selected model groups.",
+    )
     args = parser.parse_args()
 
     use_detrend = args.use_detrend
@@ -494,26 +613,60 @@ if __name__ == "__main__":
 
     max_files_to_load = None
 
-    run_training(
-        target_cols=TARGET_COLS,
-        input_cols=INPUT_COLS,
-        past_cols=PAST_COLS,
-        run_tag="all_targets",
-        use_detrend=use_detrend,
-        use_log_transform=use_log_transform,
-        shuffle_data=shuffle_data,
-        max_files_to_load=max_files_to_load,
-    )
+    runs = set(args.runs)
+    if "all" in runs:
+        runs = {"all_targets", "per_target", "simple"}
 
-    for target, cfg in PER_TARGET_CONFIG.items():
+    model_names = _parse_csv_arg(args.models)
+    exclude_model_names = _parse_csv_arg(args.exclude_models)
+    model_groups = set(args.model_groups) if args.model_groups else None
+
+    if "all_targets" in runs:
         run_training(
-            target_cols=[target],
-            input_cols=cfg.get("input", []),
-            past_cols=cfg.get("past", []),
-            run_tag=f"target_{target}",
+            target_cols=TARGET_COLS,
+            input_cols=INPUT_COLS,
+            past_cols=PAST_COLS,
+            run_tag="all_targets",
             use_detrend=use_detrend,
             use_log_transform=use_log_transform,
             shuffle_data=shuffle_data,
+            model_names=model_names,
+            exclude_model_names=exclude_model_names,
+            model_groups=model_groups,
+            max_files_to_load=max_files_to_load,
+        )
+
+    if "per_target" in runs:
+        for target, cfg in PER_TARGET_CONFIG.items():
+            run_training(
+                target_cols=[target],
+                input_cols=cfg.get("input", []),
+                past_cols=cfg.get("past", []),
+                run_tag=f"target_{target}",
+                use_detrend=use_detrend,
+                use_log_transform=use_log_transform,
+                shuffle_data=shuffle_data,
+                model_names=model_names,
+                exclude_model_names=exclude_model_names,
+                model_groups=model_groups,
+                max_files_to_load=max_files_to_load,
+            )
+
+    if "simple" in runs:
+        simple_target_cols = SIMPLE_MODEL_CONFIG.get("target_cols", TARGET_COLS)
+        simple_input_cols = SIMPLE_MODEL_CONFIG.get("input_cols", SIMPLE_MODEL_CONFIG.get("input", []))
+        simple_past_cols = SIMPLE_MODEL_CONFIG.get("past_cols", SIMPLE_MODEL_CONFIG.get("past", []))
+        run_training(
+            target_cols=simple_target_cols,
+            input_cols=simple_input_cols,
+            past_cols=simple_past_cols,
+            run_tag="simple_model",
+            use_detrend=use_detrend,
+            use_log_transform=use_log_transform,
+            shuffle_data=shuffle_data,
+            model_names=model_names,
+            exclude_model_names=exclude_model_names,
+            model_groups=model_groups,
             max_files_to_load=max_files_to_load,
         )
 

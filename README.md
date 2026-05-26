@@ -100,7 +100,7 @@ for a Darts `LinearRegressionModel` with backward (past) and forward (future) wi
 ### Example
 
 ```bash
-python model_training/train_linear_regression_forward_selection.py \
+python -m model_training.train_linear_regression_forward_selection \
   --input-chunk-length 60 \
   --output-chunk-length 30 \
   --input-chunk-lengths 60,120 \

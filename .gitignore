@@ -7,3 +7,5 @@ darts_logs/
 saved_models/
 temp/
 plots/
+evaluation_values/
+lightning_logs/

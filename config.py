@@ -1,44 +1,4 @@
-PAST_COLS = [
-    'ashes_feedrate',
-    'auger_5_load',
-    'circulation_fan_power',
-    'deduster_vacuum',
-    'elevator_1_load',
-    'filter_fan_speed',
-    'filter_power',
-    'glycol',
-    'gran1_cv',
-    'gran1_davg_surf',
-    'gran1_davg_vol',
-    'gran1_dv_10',
-    'gran1_dv_50',
-    'gran1_dv_90',
-    'gran1_obscuration',
-    'gran1_vol_gt_100_um',
-    'gran1_vol_gt_50_um',
-    'gran1_vol_in_5_50_um',
-    'gran1_vol_lt_32_um',
-    'gran1_vol_lt_5_um',
-    'gran2_blain',
-    'gran2_cv',
-    'gran2_davg_surf',
-    'gran2_davg_vol',
-    'gran2_dv_90',
-    'gran2_vol_gt_100_um',
-    'gran2_vol_gt_50_um',
-    'iron_sulfate',
-    'mill_input_temp',
-    'mill_motor_power',
-    'mill_output_temp',
-    'output_devices_power',
-    'output_vacuum',
-    'separator_input_temp',
-    'separator_load',
-    'separator_output_temp',
-    'separator_power',
-    'utility_devices_power',
-    'water',
-]
+
 
 PER_TARGET_CONFIG = {
   "first_chamber_filling": {
@@ -189,7 +149,47 @@ TARGET_COLS = [
     "gran1_blain",
 ]
 
-
+PAST_COLS = [
+    'ashes_feedrate',
+    'auger_5_load',
+    'circulation_fan_power',
+    'deduster_vacuum',
+    'elevator_1_load',
+    'filter_fan_speed',
+    'filter_power',
+    'glycol',
+    'gran1_cv',
+    'gran1_davg_surf',
+    'gran1_davg_vol',
+    'gran1_dv_10',
+    'gran1_dv_50',
+    'gran1_dv_90',
+    'gran1_obscuration',
+    'gran1_vol_gt_100_um',
+    'gran1_vol_gt_50_um',
+    'gran1_vol_in_5_50_um',
+    'gran1_vol_lt_32_um',
+    'gran1_vol_lt_5_um',
+    'gran2_blain',
+    'gran2_cv',
+    'gran2_davg_surf',
+    'gran2_davg_vol',
+    'gran2_dv_90',
+    'gran2_vol_gt_100_um',
+    'gran2_vol_gt_50_um',
+    'iron_sulfate',
+    'mill_input_temp',
+    'mill_motor_power',
+    'mill_output_temp',
+    'output_devices_power',
+    'output_vacuum',
+    'separator_input_temp',
+    'separator_load',
+    'separator_output_temp',
+    'separator_power',
+    'utility_devices_power',
+    'water',
+]
 
 TIME_COL = "sequence_index"
 DEFAULT_FREQ = '1'
@@ -273,3 +273,11 @@ RAW_COLS = [
     "separator_power",
     "circulation_fan_power",
 ]
+
+SIMPLE_MODEL_CONFIG = {
+    "target_cols": TARGET_COLS,
+    "input_cols": [
+        "clinker_1_feedrate",
+        "separator_speed",
+    ]
+}

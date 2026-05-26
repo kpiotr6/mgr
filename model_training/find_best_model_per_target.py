@@ -8,6 +8,9 @@ loads any `evaluation_metrics*.csv` files in the given folder.
 
 Outputs a CSV with the best row per target (or per target+chunk lengths), and
 includes the corresponding MAE/RMSE/MAPE values for that selection.
+
+Tip: use `--only-all-targets` to force reading only `evaluation_metrics_all_targets.csv`,
+or `--also-all-targets` to additionally write a separate "all_targets-only" output.
 """
 
 from __future__ import annotations
@@ -125,7 +128,9 @@ def load_evaluation_long(
     per_target_paths = sorted(evaluation_dir.glob("evaluation_metrics_target_*.csv"))
 
     csv_paths: list[Path]
-    if only_all_targets and all_targets_path.exists():
+    if only_all_targets:
+        if not all_targets_path.exists():
+            raise FileNotFoundError(f"File not found: {all_targets_path}")
         csv_paths = [all_targets_path]
     elif use_all_files:
         csv_paths = sorted(evaluation_dir.glob("evaluation_metrics*.csv"))
@@ -244,6 +249,37 @@ def _default_output_path(evaluation_dir: Path, group_by_chunks: bool) -> Path:
     return evaluation_dir / name
 
 
+def _default_output_path_all_targets(evaluation_dir: Path, group_by_chunks: bool) -> Path:
+    name = (
+        "best_model_per_target_all_targets_by_chunks.csv"
+        if group_by_chunks
+        else "best_model_per_target_all_targets.csv"
+    )
+    return evaluation_dir / name
+
+
+def _derive_out_path(base_out_path: Path, *, all_targets: bool, by_chunks: bool) -> Path:
+    """Derive an output path with stable suffix ordering.
+
+    Ordering is always: `_all_targets` then `_by_chunks`.
+    Any existing occurrences at the end of the stem are stripped first.
+    """
+
+    stem = base_out_path.stem
+    for marker in ("_all_targets_by_chunks", "_all_targets", "_by_chunks"):
+        if stem.endswith(marker):
+            stem = stem[: -len(marker)]
+
+    suffix = ""
+    if all_targets:
+        suffix += "_all_targets"
+    if by_chunks:
+        suffix += "_by_chunks"
+
+    new_name = f"{stem}{suffix}{base_out_path.suffix or '.csv'}"
+    return base_out_path.with_name(new_name)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Find best model per target based on MAPE from evaluation CSVs."
@@ -262,6 +298,22 @@ def main() -> int:
         "--only-all-targets",
         action="store_true",
         help="Use only evaluation_metrics_all_targets.csv (if it exists).",
+    )
+    parser.add_argument(
+        "--also-all-targets",
+        action="store_true",
+        help=(
+            "Additionally compute and write best models based only on evaluation_metrics_all_targets.csv "
+            "(useful when per-target files exist but you want the all-targets view too)."
+        ),
+    )
+    parser.add_argument(
+        "--also-by-chunks",
+        action="store_true",
+        help=(
+            "Additionally write the by-chunks output(s) (i.e., best per target + (InputChunkLength, OutputChunkLength)) "
+            "without needing a second run with --group-by-chunks."
+        ),
     )
     parser.add_argument(
         "--group-by-chunks",
@@ -311,6 +363,92 @@ def main() -> int:
         print(best.to_string(index=False))
 
     print(f"\nWrote: {out_path}")
+
+    if bool(args.also_by_chunks) and not bool(args.group_by_chunks):
+        best_by_chunks = select_best(
+            long_df,
+            group_by_chunks=True,
+            input_chunk=args.input_chunk,
+            output_chunk=args.output_chunk,
+        )
+
+        if args.out:
+            out_path_by_chunks = _derive_out_path(out_path, all_targets=False, by_chunks=True)
+        else:
+            out_path_by_chunks = _default_output_path(evaluation_dir, True)
+
+        out_path_by_chunks.parent.mkdir(parents=True, exist_ok=True)
+        best_by_chunks.to_csv(out_path_by_chunks, index=False)
+
+        with pd.option_context(
+            "display.max_rows", 200, "display.max_columns", 50, "display.width", 140
+        ):
+            print("\nBy-chunks best models:")
+            print(best_by_chunks.to_string(index=False))
+
+        print(f"\nWrote: {out_path_by_chunks}")
+
+    if bool(args.also_all_targets) and not bool(args.only_all_targets):
+        long_df_all_targets = load_evaluation_long(
+            evaluation_dir,
+            use_all_files=False,
+            only_all_targets=True,
+        )
+        best_all_targets = select_best(
+            long_df_all_targets,
+            group_by_chunks=bool(args.group_by_chunks),
+            input_chunk=args.input_chunk,
+            output_chunk=args.output_chunk,
+        )
+
+        if args.out:
+            out_path_all_targets = _derive_out_path(
+                out_path, all_targets=True, by_chunks=bool(args.group_by_chunks)
+            )
+        else:
+            out_path_all_targets = _default_output_path_all_targets(
+                evaluation_dir, bool(args.group_by_chunks)
+            )
+
+        out_path_all_targets.parent.mkdir(parents=True, exist_ok=True)
+        best_all_targets.to_csv(out_path_all_targets, index=False)
+
+        with pd.option_context(
+            "display.max_rows", 200, "display.max_columns", 50, "display.width", 140
+        ):
+            print("\nAll-targets-only best models:")
+            print(best_all_targets.to_string(index=False))
+
+        print(f"\nWrote: {out_path_all_targets}")
+
+        if bool(args.also_by_chunks) and not bool(args.group_by_chunks):
+            best_all_targets_by_chunks = select_best(
+                long_df_all_targets,
+                group_by_chunks=True,
+                input_chunk=args.input_chunk,
+                output_chunk=args.output_chunk,
+            )
+
+            if args.out:
+                out_path_all_targets_by_chunks = _derive_out_path(
+                    out_path, all_targets=True, by_chunks=True
+                )
+            else:
+                out_path_all_targets_by_chunks = _default_output_path_all_targets(
+                    evaluation_dir, True
+                )
+
+            out_path_all_targets_by_chunks.parent.mkdir(parents=True, exist_ok=True)
+            best_all_targets_by_chunks.to_csv(out_path_all_targets_by_chunks, index=False)
+
+            with pd.option_context(
+                "display.max_rows", 200, "display.max_columns", 50, "display.width", 140
+            ):
+                print("\nAll-targets-only by-chunks best models:")
+                print(best_all_targets_by_chunks.to_string(index=False))
+
+            print(f"\nWrote: {out_path_all_targets_by_chunks}")
+
     return 0
 
 

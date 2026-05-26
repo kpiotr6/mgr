@@ -3,7 +3,7 @@
 Assumptions / conventions (aligned with `config.py` and `outputs/min_max_data_preprocessed.csv`):
 
 Controls (future covariates):
-- clinker_1_feedrate in [0, 120]
+- clinker_1_feedrate in [2, 120]
 - separator_speed in [280, 800]
 
 Targets (multivariate series, 4 dims):
@@ -16,7 +16,7 @@ The MPC:
 - evaluates a grid (e.g. 5x5) of (clinker_1_feedrate, separator_speed)
 - uses a control horizon of 12 steps split into 2 constant blocks of 6 steps
 - forward horizon can be 15 / 30 / 60
-- minimizes MSE to setpoints, applies only the first action (receding horizon)
+- minimizes MAPE to setpoints, applies only the first action (receding horizon)
 """
 
 from __future__ import annotations
@@ -109,7 +109,24 @@ def resolve_darts_model_class(model_class_name: str):
 			f"Try e.g. 'NeuralForecastModel'."
 		)
 
-	return getattr(darts_models, model_class_name)
+	model_class = getattr(darts_models, model_class_name)
+	# Darts exposes optional models as a NotImportedModule placeholder when
+	# extras are missing (e.g., NeuralForecastModel requires `neuralforecast`).
+	try:
+		from darts.utils.utils import NotImportedModule  # type: ignore
+		is_placeholder = isinstance(model_class, NotImportedModule)
+	except Exception:
+		is_placeholder = model_class.__class__.__name__ == "NotImportedModule"
+
+	if is_placeholder:
+		raise ImportError(
+			f"Darts model '{model_class_name}' is not available in this Python environment "
+			"(optional dependency missing). "
+			"Install the required extra (e.g. `neuralforecast`) in the same interpreter, "
+			"or run using the project's virtualenv (e.g. `.venv/bin/python`)."
+		)
+
+	return model_class
 
 
 def _timeseries_from_array(values: np.ndarray, columns: list[str], start: int = 0):
@@ -161,8 +178,10 @@ class DartsPredictor:
 
 		model_class = resolve_darts_model_class(model_class_name)
 		try:
+			if not hasattr(model_class, "load_from_checkpoint"):
+				raise AttributeError("Model class has no load_from_checkpoint")
 			self.model = model_class.load_from_checkpoint(model_name=model_name, best=True)
-		except ModuleNotFoundError:
+		except (AttributeError, FileNotFoundError, ModuleNotFoundError, RuntimeError, ValueError):
 			# Fallback: load the serialized model artifact if present.
 			model_tar = self.model_dir / model_name / "_model.pth.tar"
 			if hasattr(model_class, "load") and model_tar.exists():
@@ -258,13 +277,58 @@ class DartsPredictor:
 		return pred.values(copy=False)
 
 
+class NaivePredictor:
+	"""Naive baseline predictor: holds the last observed targets constant.
+
+	This is useful as a baseline and for running MPC without a Darts checkpoint.
+	It ignores controls and simply repeats the last row of `y_hist` for `n` steps.
+	"""
+
+	def __init__(
+		self,
+		*,
+		target_cols: list[str] = TARGET_COLS,
+		control_cols: list[str] = CONTROL_COLS,
+		input_chunk_length: int = 60,
+	):
+		self.target_cols = list(target_cols)
+		self.control_cols = list(control_cols)
+		self.input_chunk_length = int(input_chunk_length)
+
+	def predict(
+		self,
+		*,
+		y_hist: np.ndarray,
+		u_hist: np.ndarray,
+		u_future: np.ndarray,
+		n: int,
+	) -> np.ndarray:
+		y_hist = np.asarray(y_hist, dtype=float)
+		u_hist = np.asarray(u_hist, dtype=float)
+		u_future = np.asarray(u_future, dtype=float)
+
+		if y_hist.ndim != 2 or y_hist.shape[1] != len(self.target_cols):
+			raise ValueError(f"y_hist must be (T,{len(self.target_cols)})")
+		if u_hist.ndim != 2 or u_hist.shape[1] != len(self.control_cols):
+			raise ValueError(f"u_hist must be (T,{len(self.control_cols)})")
+		if u_future.ndim != 2 or u_future.shape[1] != len(self.control_cols):
+			raise ValueError(f"u_future must be (n,{len(self.control_cols)})")
+		if len(u_future) != int(n):
+			raise ValueError("u_future length must equal n")
+		if len(y_hist) == 0:
+			raise ValueError("y_hist must contain at least one row")
+
+		last = y_hist[-1].reshape(1, -1)
+		return np.repeat(last, repeats=int(n), axis=0)
+
+
 @dataclass
 class MPCConfig:
 	forward_horizon: int = 30
 	control_horizon: int = 12
 	block_size: int = 6
 	grid_n: int = 5
-	clinker_1_feedrate_min: float = 0.0
+	clinker_1_feedrate_min: float = 2.0
 	clinker_1_feedrate_max: float = 120.0
 	separator_speed_min: float = 280.0
 	separator_speed_max: float = 800.0
@@ -323,9 +387,11 @@ class DiscreteGridMPC:
 		cfg = self.cfg
 		n = int(cfg.forward_horizon)
 		sp = np.array([self.setpoints[c] for c in TARGET_COLS], dtype=float).reshape(1, -1)
+		u_last = np.asarray(u_hist, dtype=float)[-1]
 
 		best_cost = float("inf")
 		best_u0: tuple[float, float] | None = None
+		best_du = float("inf")
 
 		# Two-block search: 25 * 25 for 5x5 grid.
 		for u1 in self._grid:
@@ -343,13 +409,24 @@ class DiscreteGridMPC:
 					continue
 
 				err = y_pred - sp
-				# weighted MSE over variables, then average over time
-				mse_t = np.mean((err ** 2) * self._w.reshape(1, -1), axis=1)
-				cost = float(np.mean(mse_t))
+				# weighted MAPE over variables, then average over time
+				# (epsilon avoids division by zero for near-zero setpoints)
+				eps = 1e-6
+				denom = np.maximum(np.abs(sp), eps)
+				mape_t = np.mean((np.abs(err) / denom) * self._w.reshape(1, -1), axis=1)
+				cost = float(np.mean(mape_t))
 
 				if cost < best_cost:
 					best_cost = cost
 					best_u0 = u1
+					best_du = float(np.sum((np.array(u1, dtype=float) - u_last) ** 2))
+				elif best_u0 is not None and np.isfinite(cost) and np.isclose(cost, best_cost, rtol=1e-12, atol=1e-12):
+					# Tie-break: prefer the action closest to the last applied control.
+					# This makes naive/constant predictors behave as "do not change controls".
+					du = float(np.sum((np.array(u1, dtype=float) - u_last) ** 2))
+					if du < best_du:
+						best_u0 = u1
+						best_du = du
 
 		if best_u0 is None:
 			raise RuntimeError("MPC failed: no candidate control sequence could be evaluated")
