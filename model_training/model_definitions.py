@@ -11,6 +11,15 @@ from darts.models import (
     NLinearModel,
     XGBModel,
 )
+
+try:
+    # Darts >= 0.44
+    from darts.models import Chronos2Model  # type: ignore
+
+    _HAS_CHRONOS2 = True
+except Exception:
+    Chronos2Model = None  # type: ignore
+    _HAS_CHRONOS2 = False
 from pytorch_lightning.loggers import CSVLogger
 from pytorch_lightning.callbacks import Callback
 import matplotlib.pyplot as plt
@@ -19,7 +28,7 @@ import os
 from neuralforecast.losses.pytorch import RMSE
 
 NAIVE_MODELS = ["NaiveLastValue"]
-MODELS_WITH_FUTURE_COVARIATES = ["LinearRegression", "Lasso", "NeuralForecast_Nhits", "NeuralForecast_NLinear", "NeuralForecast_DLinear", "NeuralForecast_TFT", "NeuralForecast_TSMixer", "NeuralForecast_PatchTST", "NeuralForecast_XLinear", "NeuralForecast_xLSTM", "NeuralForecast_RNN", "NeuralForecast_BiTCN", "Darts_XGB", "Darts_DLinear", "Darts_NLinear", "Darts_Nhits", "Darts_TSMixer"]
+MODELS_WITH_FUTURE_COVARIATES = ["LinearRegression", "Lasso", "NeuralForecast_Nhits", "NeuralForecast_NLinear", "NeuralForecast_DLinear", "NeuralForecast_TFT", "NeuralForecast_TSMixer", "NeuralForecast_PatchTST", "NeuralForecast_XLinear", "NeuralForecast_xLSTM", "NeuralForecast_RNN", "NeuralForecast_BiTCN", "Darts_XGB", "Darts_DLinear", "Darts_NLinear", "Darts_Nhits", "Darts_TSMixer", "Chronos2"]
 MODELS_FUTURE_COVARIATES_ONLY = ["NeuralForecast_TimesNet"]
 CHECKPOINT_MODELS = ["NeuralForecast_Nhits", "NeuralForecast_NLinear", "NeuralForecast_DLinear", "NeuralForecast_TFT", "NeuralForecast_TSMixer", "NeuralForecast_PatchTST", "NeuralForecast_XLinear", "NeuralForecast_xLSTM", "NeuralForecast_TimesNet", "NeuralForecast_RNN", "NeuralForecast_BiTCN", "Darts_DLinear", "Darts_NLinear", "Darts_Nhits", "Darts_TSMixer", "Darts_RNN"]
 
@@ -98,6 +107,18 @@ def get_models(
     models = {
         "NaiveLastValue": NaiveSeasonal(K=1),
         "LinearRegression": LinearRegressionModel(**linear_regression_kwargs),
+        **(
+            {
+                # Chronos-2 foundation model (zero-shot by default with epochs=0 in fit)
+                "Chronos2": Chronos2Model(
+                    input_chunk_length=input_chunk_length,
+                    output_chunk_length=output_chunk_length,
+                    hub_model_name="autogluon/chronos-2-small",
+                )
+            }
+            if _HAS_CHRONOS2
+            else {}
+        ),
         "NeuralForecast_BiTCN": NeuralForecastModel(
             model_name=f"NeuralForecast_BiTCN_I{input_chunk_length}_O{output_chunk_length}",
             model="BiTCN",
@@ -106,7 +127,7 @@ def get_models(
             input_chunk_length=input_chunk_length,
             output_chunk_length=output_chunk_length,
             loss_fn=RMSE(),
-            n_epochs=3,
+            n_epochs=20,
             batch_size=128,
             optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
             pl_trainer_kwargs={
@@ -124,7 +145,7 @@ def get_models(
             input_chunk_length=input_chunk_length,
             output_chunk_length=output_chunk_length,
             loss_fn=RMSE(),
-            n_epochs=3,
+            n_epochs=20,
             batch_size=128,
             optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
             pl_trainer_kwargs={
@@ -142,7 +163,7 @@ def get_models(
             input_chunk_length=input_chunk_length,
             output_chunk_length=output_chunk_length,
             loss_fn=RMSE(),
-            n_epochs=3,
+            n_epochs=20,
             batch_size=128,
             optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
             pl_trainer_kwargs={
@@ -160,7 +181,7 @@ def get_models(
             input_chunk_length=input_chunk_length,
             output_chunk_length=output_chunk_length,
             loss_fn=RMSE(),
-            n_epochs=3,
+            n_epochs=40,
             batch_size=128,
             optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
             pl_trainer_kwargs={

@@ -293,8 +293,8 @@ def run_training(
     test_covariates_scaled = covariates_scaler.transform(test_covariates) if has_input_covariates else [None] * len(test_targets)
     test_past_covariates_scaled = past_covariates_scaler.transform(test_past_covariates) if has_past_covariates else [None] * len(test_targets)
 
-    input_chunk_lengths = [60, 120]
-    output_chunk_lengths = [15, 30, 60]
+    input_chunk_lengths = [60, 120, 180]
+    output_chunk_lengths = [30, 60, 120, 180]
     all_results = []
     best_models_dict = {}
     true_windows_for_chunk = []
@@ -332,7 +332,7 @@ def run_training(
                 if name in CHECKPOINT_MODELS:
                     # Ensure scalers are persisted in the corresponding checkpoint directory.
                     persist_scalers(model_name_for_artifacts)
-                elif name == "LinearRegression":
+                elif name == "LinearRegression" or name == "Chronos2":
                     # LinearRegressionModel is not checkpoint-based, but MPC/inference still
                     # expects artifacts under `darts_logs/<model_name>/`.
                     persist_scalers(model_name_for_artifacts)
@@ -354,6 +354,9 @@ def run_training(
                     if has_past_covariates:
                         fit_kwargs["past_covariates"] = train_past_covariates_scaled
                         fit_kwargs["val_past_covariates"] = val_past_covariates_scaled
+                    if name == "Chronos2":
+                        # Zero-shot Chronos-2: do not train/fine-tune.
+                        fit_kwargs["epochs"] = 0
                     model.fit(**fit_kwargs)
                 elif name in MODELS_FUTURE_COVARIATES_ONLY:
                     fit_kwargs = dict(
@@ -381,7 +384,7 @@ def run_training(
                         print(f"[{run_tag}] Loaded best checkpoint for {name}.")
                     except Exception as e:
                         print(f"[{run_tag}] Could not load best checkpoint for {name}: {e}")
-                elif name == "LinearRegression":
+                elif name == "LinearRegression" or name == "Chronos2":
                     try:
                         persist_serialized_model(model_name_for_artifacts, model)
                         print(f"[{run_tag}] Saved serialized model for {name} to darts_logs/{model_name_for_artifacts}/_model.pth.tar")
