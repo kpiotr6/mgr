@@ -9,4 +9,4 @@
 
 module add GCCcore/14.3.0 Python/3.13.5
 export PYTHONPATH="${PYTHONPATH}:/net/tscratch/people/plgkpiotr6/mgr/pip/"
-python -m model_training.train_models
+python model_training/train_models.py --runs per_target
