@@ -129,12 +129,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Plot MAPE metrics grouped by input and output chunk length.")
     parser.add_argument(
         "--csv",
-        default="/home/kpiotr6/Documents/stuida/praca_magisterska/proj/outputs_ready/evaluation_metrics_all_targets.csv",
+        default="./outputs_ready/evaluation_metrics_all_targets.csv",
         help="Path to evaluation_metrics_all_targets.csv",
     )
     parser.add_argument(
         "--output-dir",
-        default="/home/kpiotr6/Documents/stuida/praca_magisterska/proj/chart_drawing/mape_charts",
+        default="./chart_drawing/mape_charts",
         help="Directory to save charts",
     )
 
