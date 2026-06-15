@@ -52,7 +52,12 @@ def _normalize_session_frame(session_df: pd.DataFrame) -> pd.DataFrame:
     return session_df
 
 
-def preprocess_file(input_file: Path, output_file: Path) -> tuple[int, int]:
+def preprocess_file(
+    input_file: Path,
+    output_file: Path,
+    ma_window: int = 0,
+    check_gran_empty: bool = False
+) -> tuple[int, int]:
     df = pd.read_csv(input_file)
 
     missing_columns = [column for column in OUTPUT_COLS if column not in df.columns]
@@ -68,10 +73,13 @@ def preprocess_file(input_file: Path, output_file: Path) -> tuple[int, int]:
     processed_sessions = []
     for _, session_df in df.groupby(SESSION_COL, sort=True):
         session_df = session_df.sort_values(TIME_COL).reset_index(drop=True)
-        zero_mask = session_df["gran1_blain"].eq(0)
-        if zero_mask.any():
-            first_zero_position = int(zero_mask.idxmax())
-            session_df = session_df.iloc[:first_zero_position].copy()
+
+        # Truncate session if gran1_blain is empty (NaN) or 0, based on the flag
+        if check_gran_empty:
+            empty_mask = session_df["gran1_blain"].eq(0) | session_df["gran1_blain"].isna()
+            if empty_mask.any():
+                first_empty_position = int(empty_mask.idxmax())
+                session_df = session_df.iloc[:first_empty_position].copy()
 
         if session_df.empty:
             continue
@@ -80,11 +88,22 @@ def preprocess_file(input_file: Path, output_file: Path) -> tuple[int, int]:
 
     if not processed_sessions:
         raise ValueError(
-            f"{input_file.name} has no session rows left after applying `gran1_blain == 0` truncation."
+            f"{input_file.name} has no session rows left after processing."
         )
 
     processed_df = pd.concat(processed_sessions, ignore_index=True)
     processed_df = processed_df[OUTPUT_COLS]
+
+    # Calculate moving average if a window length is provided
+    if ma_window > 0:
+        cols_to_ma = [col for col in OUTPUT_COLS if col not in (SESSION_COL, TIME_COL)]
+        for col in cols_to_ma:
+            ma_col_name = f"{col}_ma_{ma_window}"
+            processed_df[ma_col_name] = (
+                processed_df.groupby(SESSION_COL)[col]
+                .transform(lambda x: x.rolling(window=ma_window, min_periods=1).mean())
+            )
+
     output_file.parent.mkdir(parents=True, exist_ok=True)
     processed_df.to_csv(output_file, index=False)
 
@@ -95,6 +114,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Preprocess raw data files into `data_preprocessed`.")
     parser.add_argument("--input-dir", default="data", help="Folder with raw CSV files.")
     parser.add_argument("--output-dir", default="data_preprocessed", help="Folder for processed CSV files.")
+    parser.add_argument("--ma-window", type=int, default=0, help="Moving average window length. 0 (default) disables it.")
+    parser.add_argument("--check-gran-empty", action="store_true", help="Truncate session when `gran1_blain` hits 0 or is empty/NaN.")
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir)
@@ -106,7 +127,12 @@ def main() -> None:
 
     for input_file in csv_files:
         output_file = output_dir / input_file.name
-        original_rows, processed_rows = preprocess_file(input_file, output_file)
+        original_rows, processed_rows = preprocess_file(
+            input_file,
+            output_file,
+            args.ma_window,
+            args.check_gran_empty
+        )
         print(f"{input_file.name}: {original_rows} -> {processed_rows} rows saved to {output_file}")
 
 

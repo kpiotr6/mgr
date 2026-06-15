@@ -181,7 +181,7 @@ def get_models(
             input_chunk_length=input_chunk_length,
             output_chunk_length=output_chunk_length,
             loss_fn=RMSE(),
-            n_epochs=40,
+            n_epochs=20,
             batch_size=128,
             optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
             pl_trainer_kwargs={

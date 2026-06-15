@@ -245,11 +245,7 @@ def run_training(
     past_covariates_scaler = Scaler(global_fit=True) if has_past_covariates else None
 
     def persist_scalers(model_name: str) -> None:
-        """Save scalers next to the Darts checkpoint folder.
-
-        MPC/inference relies on `darts_logs/<model_name>/scalers.pkl`.
-        """
-
+        """Save scalers next to the Darts checkpoint folder."""
         out_path = Path("darts_logs") / model_name / "scalers.pkl"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         bundle = {
@@ -267,11 +263,7 @@ def run_training(
             pickle.dump(bundle, f)
 
     def persist_serialized_model(model_name: str, model_obj) -> None:
-        """Save a non-checkpoint Darts model next to `darts_logs/<model_name>/`.
-
-        `mpc/DartsPredictor` can load `_model.pth.tar` via `model_class.load()`.
-        """
-
+        """Save a non-checkpoint Darts model next to `darts_logs/<model_name>/`."""
         out_dir = Path("darts_logs") / model_name
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / "_model.pth.tar"
@@ -330,11 +322,8 @@ def run_training(
                 model_name_for_artifacts = f"{name}_I{input_chunk_length}_O{output_chunk_length}"
 
                 if name in CHECKPOINT_MODELS:
-                    # Ensure scalers are persisted in the corresponding checkpoint directory.
                     persist_scalers(model_name_for_artifacts)
                 elif name == "LinearRegression" or name == "Chronos2":
-                    # LinearRegressionModel is not checkpoint-based, but MPC/inference still
-                    # expects artifacts under `darts_logs/<model_name>/`.
                     persist_scalers(model_name_for_artifacts)
 
                 model_train_targets = train_targets_scaled
@@ -355,7 +344,6 @@ def run_training(
                         fit_kwargs["past_covariates"] = train_past_covariates_scaled
                         fit_kwargs["val_past_covariates"] = val_past_covariates_scaled
                     if name == "Chronos2":
-                        # Zero-shot Chronos-2: do not train/fine-tune.
                         fit_kwargs["epochs"] = 0
                     model.fit(**fit_kwargs)
                 elif name in MODELS_FUTURE_COVARIATES_ONLY:
@@ -560,6 +548,7 @@ def run_training(
         results_df.to_csv(results_path, index=False)
         print(f"\n[{run_tag}] Final evaluation metrics saved to {results_path}")
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train forecasting models with optional preprocessing transforms.")
     parser.add_argument(
@@ -577,7 +566,6 @@ if __name__ == "__main__":
         action="store_true",
         help="Shuffle the data blocks before train/val/test split.",
     )
-
     parser.add_argument(
         "--runs",
         nargs="+",
@@ -604,13 +592,62 @@ if __name__ == "__main__":
         default=None,
         help="Train only selected model groups.",
     )
+    parser.add_argument(
+        "--ma-window",
+        type=int,
+        default=0,
+        help="If > 0, calculates moving average column names. Target MAs are added to PAST_COLS to prevent data leakage.",
+    )
     args = parser.parse_args()
+
+    # Apply MA Window configurations if requested
+    if args.ma_window > 0:
+        w = args.ma_window
+
+        target_ma_cols = [f"{c}_ma_{w}" for c in TARGET_COLS]
+        input_ma_cols = [f"{c}_ma_{w}" for c in INPUT_COLS]
+        past_ma_cols = [f"{c}_ma_{w}" for c in PAST_COLS]
+
+        # Target columns remain exactly the same (do not predict the moving average)
+        # Inputs get their own MAs
+        INPUT_COLS = list(INPUT_COLS) + input_ma_cols
+
+        # Past Covariates get their own MAs PLUS the moving averages of the targets
+        PAST_COLS = list(PAST_COLS) + past_ma_cols + target_ma_cols
+
+        # Update per target config in place
+        for target_key, cfg in PER_TARGET_CONFIG.items():
+            if "input" in cfg:
+                cfg["input"] = list(cfg["input"]) + [f"{c}_ma_{w}" for c in cfg["input"]]
+
+            # Append past MAs and the current target's MA to past covariates
+            if "past" in cfg:
+                cfg["past"] = list(cfg["past"]) + [f"{c}_ma_{w}" for c in cfg["past"]] + [f"{target_key}_ma_{w}"]
+            else:
+                cfg["past"] = [f"{target_key}_ma_{w}"]
+
+        # Update simple model config in place
+        simple_target_cols = SIMPLE_MODEL_CONFIG.get("target_cols", TARGET_COLS)
+        simple_target_mas = [f"{c}_ma_{w}" for c in simple_target_cols]
+
+        if "input_cols" in SIMPLE_MODEL_CONFIG:
+            SIMPLE_MODEL_CONFIG["input_cols"] = list(SIMPLE_MODEL_CONFIG["input_cols"]) + [f"{c}_ma_{w}" for c in SIMPLE_MODEL_CONFIG["input_cols"]]
+        elif "input" in SIMPLE_MODEL_CONFIG:
+            SIMPLE_MODEL_CONFIG["input"] = list(SIMPLE_MODEL_CONFIG["input"]) + [f"{c}_ma_{w}" for c in SIMPLE_MODEL_CONFIG["input"]]
+
+        if "past_cols" in SIMPLE_MODEL_CONFIG:
+            SIMPLE_MODEL_CONFIG["past_cols"] = list(SIMPLE_MODEL_CONFIG["past_cols"]) + [f"{c}_ma_{w}" for c in SIMPLE_MODEL_CONFIG["past_cols"]] + simple_target_mas
+        elif "past" in SIMPLE_MODEL_CONFIG:
+            SIMPLE_MODEL_CONFIG["past"] = list(SIMPLE_MODEL_CONFIG["past"]) + [f"{c}_ma_{w}" for c in SIMPLE_MODEL_CONFIG["past"]] + simple_target_mas
+        else:
+            # If neither exist, initialize past_cols with target moving averages
+            SIMPLE_MODEL_CONFIG["past_cols"] = simple_target_mas
 
     use_detrend = args.use_detrend
     use_log_transform = args.use_log_transform
     shuffle_data = args.shuffle
 
-    print(f"use_detrend={use_detrend}, use_log_transform={use_log_transform}")
+    print(f"use_detrend={use_detrend}, use_log_transform={use_log_transform}, ma_window={args.ma_window}")
 
     os.makedirs("outputs", exist_ok=True)
 
@@ -672,4 +709,3 @@ if __name__ == "__main__":
             model_groups=model_groups,
             max_files_to_load=max_files_to_load,
         )
-
