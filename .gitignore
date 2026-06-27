@@ -9,3 +9,4 @@ temp/
 plots/
 evaluation_values/
 lightning_logs/
+chart_drawing/predicted_true_comparison

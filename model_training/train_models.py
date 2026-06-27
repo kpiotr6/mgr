@@ -11,12 +11,13 @@ import warnings
 import logging
 import pickle
 from pathlib import Path
+import numpy as np
 
 warnings.filterwarnings("ignore")
 logging.getLogger("pytorch_lightning").setLevel(logging.ERROR)
 logging.getLogger("pytorch_lightning.utilities.rank_zero").setLevel(logging.ERROR)
 logging.getLogger("pytorch_lightning.accelerators.cuda").setLevel(logging.ERROR)
-
+logging.getLogger("darts").setLevel(logging.ERROR)
 
 # Allow running this file directly (e.g. `python model_training/train_models.py`)
 # by ensuring the project root (where `config.py` lives) is on sys.path.
@@ -97,6 +98,11 @@ def load_data(
 ):
     df = pd.read_csv(filepath)
     df[TIME_COL] = pd.to_datetime(df[TIME_COL])
+
+    all_numeric_cols = set(target_cols + input_cols + past_cols)
+    for col in all_numeric_cols:
+        if col in df.columns:
+            df[col] = df[col].astype(np.float32)
 
     # A new time series starts when 'session_index' changes
     group_id = (df['session_index'] != df['session_index'].shift()).cumsum()

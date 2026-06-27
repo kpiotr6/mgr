@@ -191,6 +191,29 @@ def get_models(
                 "enable_model_summary": False,
             }
         ),
+        "NeuralForecast_TFT": NeuralForecastModel(
+            model_name=f"NeuralForecast_TFT_I{input_chunk_length}_O{output_chunk_length}",
+            model="TFT",
+            model_kwargs={
+                "hidden_size": 16,
+                "n_head": 2,
+                "n_rnn_layers": 1
+            },
+            save_checkpoints=True,
+            force_reset=True,
+            input_chunk_length=input_chunk_length,
+            output_chunk_length=output_chunk_length,
+            loss_fn=RMSE(),
+            n_epochs=5,
+            batch_size=128,
+            optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
+            pl_trainer_kwargs={
+                "logger": CSVLogger(f"outputs/logs/I{input_chunk_length}_O{output_chunk_length}", name="NF_TFT"),
+                "callbacks": [LossPlotCallback("NF_TFT", f"outputs/logs/I{input_chunk_length}_O{output_chunk_length}/plots")],
+                "log_every_n_steps": 1,
+                "enable_model_summary": False,
+            }
+        ),
     }
 
     return models

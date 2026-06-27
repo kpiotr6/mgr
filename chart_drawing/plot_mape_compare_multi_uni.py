@@ -85,11 +85,17 @@ def plot_grouped_bars(
         axis.set_ylim(0, y_axis_max)
     axis.set_title(title)
 
-    # Place legend slightly outside the plot area so it doesn't overlap with the bars
-    axis.legend(title="Source", bbox_to_anchor=(1.01, 1), loc="upper left")
+    # Place legend completely outside the plot area to the right
+    axis.legend(
+        title="Source",
+        bbox_to_anchor=(1.02, 1),
+        loc="upper left",
+        borderaxespad=0.0
+    )
 
     fig.tight_layout()
-    fig.savefig(output_path, dpi=300)
+    # Add bbox_inches="tight" to ensure the saved PNG expands to fit the legend
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -149,9 +155,15 @@ def build_charts(csv_all_path: Path, csv_dir: Path, output_dir: Path) -> None:
             input_frame = df_combined[df_combined["InputChunkLength"] == input_length]
             output_lengths = sorted(input_frame["OutputChunkLength"].unique())
 
+            # Calculate input minutes (6 points = 1 minute)
+            input_minutes = input_length / 6.0
+
             # Generate a distinct plot for EVERY OutputChunkLength
             for output_length in output_lengths:
                 output_frame = input_frame[input_frame["OutputChunkLength"] == output_length]
+
+                # Calculate output minutes (6 points = 1 minute)
+                output_minutes = output_length / 6.0
 
                 # The groups are strictly Single vs All now
                 groups_ordered = ["All Targets", "Single Target"]
@@ -165,7 +177,13 @@ def build_charts(csv_all_path: Path, csv_dir: Path, output_dir: Path) -> None:
                 existing_groups = [g for g in groups_ordered if g in pivot.columns]
                 pivot = pivot.reindex(columns=existing_groups)
 
-                title = f"MAPE comparison for {target_name}\n(Input: {input_length}, Output: {output_length})"
+                # Updated Title with converted minutes and frequency
+                title = (
+                    f"MAPE comparison for {target_name}\n"
+                    f"Input: {input_length} steps ({input_minutes:.1f} min), "
+                    f"Output: {output_length} steps ({output_minutes:.1f} min) | Freq: 10s"
+                )
+
                 filename = sanitize_filename(f"mape_compare_{target_name}_in_{input_length}_out_{output_length}.png")
                 output_path = output_dir / filename
 

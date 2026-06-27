@@ -59,7 +59,12 @@ def plot_grouped_bars(
     for idx, output_length in enumerate(output_lengths):
         values = pivot[output_length].to_numpy()
         offsets = x_positions + (idx - (len(output_lengths) - 1) / 2) * bar_width
-        bars = axis.bar(offsets, values, width=bar_width, label=str(output_length))
+
+        # Calculate minutes based on 6 points = 1 minute
+        output_minutes = output_length / 6.0
+        label_str = f"{output_length} steps ({output_minutes:.1f} min)"
+
+        bars = axis.bar(offsets, values, width=bar_width, label=label_str)
 
         for bar, value in zip(bars, values, strict=True):
             if np.isnan(value):
@@ -80,10 +85,18 @@ def plot_grouped_bars(
     if y_axis_max is not None and y_axis_max > 0:
         axis.set_ylim(0, y_axis_max)
     axis.set_title(title)
-    axis.legend(title="OutputChunkLength")
+
+    # Move legend completely outside the plot area to the right
+    axis.legend(
+        title="Output Chunk Length",
+        bbox_to_anchor=(1.02, 1),
+        loc="upper left",
+        borderaxespad=0.0
+    )
 
     fig.tight_layout()
-    fig.savefig(output_path, dpi=300)
+    # Add bbox_inches="tight" so the external legend isn't chopped off in the saved file
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -102,6 +115,9 @@ def build_charts(csv_path: Path, output_dir: Path) -> None:
     for input_length in input_lengths:
         input_frame = data_frame[data_frame["InputChunkLength"] == input_length]
 
+        # Calculate input minutes based on 6 points = 1 minute
+        input_minutes = input_length / 6.0
+
         for mape_column in mape_columns:
             metric_frame = input_frame[["Model", "OutputChunkLength", mape_column]].dropna()
             if metric_frame.empty:
@@ -115,7 +131,13 @@ def build_charts(csv_path: Path, output_dir: Path) -> None:
             )
 
             metric_name = mape_column.replace("MAPE_", "")
-            title = f"MAPE metic value for {metric_name}"
+
+            # Updated title to include time info, input minutes, and frequency
+            title = (
+                f"MAPE metric value for {metric_name}\n"
+                f"Input: {input_length} steps ({input_minutes:.1f} min) | Freq: 10s"
+            )
+
             filename = sanitize_filename(f"mape_{metric_name}_input_{input_length}.png")
             output_path = output_dir / filename
 
