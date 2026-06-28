@@ -194,11 +194,6 @@ def get_models(
         "NeuralForecast_TFT": NeuralForecastModel(
             model_name=f"NeuralForecast_TFT_I{input_chunk_length}_O{output_chunk_length}",
             model="TFT",
-            model_kwargs={
-                "hidden_size": 16,
-                "n_head": 2,
-                "n_rnn_layers": 1
-            },
             save_checkpoints=True,
             force_reset=True,
             input_chunk_length=input_chunk_length,
