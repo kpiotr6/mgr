@@ -340,8 +340,8 @@ def run_training(
     test_covariates_scaled = covariates_scaler.transform(test_covariates) if has_input_covariates else [None] * len(test_targets)
     test_past_covariates_scaled = past_covariates_scaler.transform(test_past_covariates) if has_past_covariates else [None] * len(test_targets)
 
-    input_chunk_lengths = [60, 120, 180]
-    output_chunk_lengths = [30, 60, 120, 180]
+    input_chunk_lengths = [60, 120]
+    output_chunk_lengths = [30, 60, 120]
     all_results = []
     best_models_dict = {}
     true_windows_for_chunk = []
