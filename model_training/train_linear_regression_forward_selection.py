@@ -1,6 +1,7 @@
 """
 Train Darts LinearRegressionModel with forward selection over PAST_COLS and INPUT_COLS.
 Uses backward (past covariates) and forward (future covariates) windows.
+Additionally includes other TARGET_COLS as available past covariates.
 """
 
 import argparse
@@ -30,11 +31,11 @@ if str(PROJECT_ROOT) not in sys.path:
 
 
 from config import INPUT_COLS, PAST_COLS, TARGET_COLS, TIME_COL
-from .detrend_data import (
+from model_training.detrend_data import (
     detrend_timeseries_linear,
     reset_detrend_storage,
 )
-from .log_transform_data import (
+from model_training.log_transform_data import (
     log_transform_timeseries,
     reset_log_transform_storage,
 )
@@ -176,13 +177,15 @@ def forward_selection(
     output_chunk_length: int,
     max_features: Optional[int],
     min_improvement: float,
+    available_past_cols: List[str],
+    available_input_cols: List[str],
 ) -> Tuple[List[str], List[str], List[dict]]:
     selected_past = []
     selected_input = []
     best_score = float("inf")
     steps = []
 
-    candidates = [("past", col) for col in PAST_COLS] + [("input", col) for col in INPUT_COLS]
+    candidates = [("past", col) for col in available_past_cols] + [("input", col) for col in available_input_cols]
 
     for candidate_type, candidate in candidates:
         if max_features is not None and (len(selected_past) + len(selected_input)) >= max_features:
@@ -231,6 +234,26 @@ def forward_selection(
             )
 
     return selected_past, selected_input, steps
+
+
+def combine_past_and_targets(
+    past_covs: List[Optional[TimeSeries]],
+    targets: List[TimeSeries],
+    other_targets: List[str]
+) -> List[Optional[TimeSeries]]:
+    """Helper to merge other target columns into past covariates for selection."""
+    if not other_targets:
+        return past_covs
+
+    combined = []
+    for p_ts, t_ts in zip(past_covs, targets):
+        t_other = t_ts[other_targets]
+        if p_ts is not None:
+            # Concatenates along the component axis (axis=1)
+            combined.append(p_ts.concatenate(t_other, axis=1))
+        else:
+            combined.append(t_other)
+    return combined
 
 
 def main():
@@ -364,8 +387,25 @@ def main():
 
     for target_col in TARGET_COLS:
         print(f"\n=== Target: {target_col} ===")
+
+        # 1. Isolate the target column for prediction
         train_targets_target = [ts[target_col] for ts in train_targets_scaled]
         val_targets_target = [ts[target_col] for ts in val_targets_scaled]
+
+        # 2. Identify the "other" target columns to treat as past covariates
+        other_targets = [col for col in TARGET_COLS if col != target_col]
+
+        # 3. Create combined past covariates including the other targets
+        train_past_combined = combine_past_and_targets(
+            train_past_covariates_scaled, train_targets_scaled, other_targets
+        )
+        val_past_combined = combine_past_and_targets(
+            val_past_covariates_scaled, val_targets_scaled, other_targets
+        )
+
+        # 4. Set available candidate columns
+        available_past_cols = list(PAST_COLS) + other_targets
+        available_input_cols = list(INPUT_COLS)
 
         for input_len in input_lengths:
             for output_len in output_lengths:
@@ -375,12 +415,14 @@ def main():
                     val_targets_target,
                     train_covariates_scaled,
                     val_covariates_scaled,
-                    train_past_covariates_scaled,
-                    val_past_covariates_scaled,
+                    train_past_combined,
+                    val_past_combined,
                     input_len,
                     output_len,
                     args.max_features,
                     args.min_improvement,
+                    available_past_cols,    # Injected here
+                    available_input_cols,   # Injected here
                 )
 
                 steps_df = pd.DataFrame(steps)

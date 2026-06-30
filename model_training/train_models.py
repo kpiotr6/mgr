@@ -90,6 +90,19 @@ def _filter_models(
     return filtered
 
 
+def apply_exponential_smoothing(ts_list: list, alpha: float) -> list:
+    """Applies Exponential Smoothing to a list of Darts TimeSeries."""
+    smoothed = []
+    for ts in ts_list:
+        if ts is None:
+            smoothed.append(None)
+        else:
+            df = ts.to_dataframe()
+            df_smoothed = df.ewm(alpha=alpha, adjust=False).mean()
+            smoothed.append(TimeSeries.from_dataframe(df_smoothed))
+    return smoothed
+
+
 def load_data(
     filepath: str,
     target_cols: list[str],
@@ -159,6 +172,8 @@ def run_training(
     use_detrend: bool,
     use_log_transform: bool,
     shuffle_data: bool,
+    exp_smoothing_alpha: float | None = None,
+    eval_on_smoothed: bool = False,
     model_names: set[str] | None = None,
     exclude_model_names: set[str] | None = None,
     model_groups: set[str] | None = None,
@@ -191,8 +206,22 @@ def run_training(
 
     print(f"[{run_tag}] Total loaded series blocks: {len(targets_list)}")
 
+    # Capture original lists BEFORE any smoothing or transformation
     original_targets_list = list(targets_list)
     series_indices = list(range(len(targets_list)))
+
+    # Apply Exponential Smoothing if requested
+    if exp_smoothing_alpha is not None:
+        print(f"\n[{run_tag}] Applying exponential smoothing (alpha={exp_smoothing_alpha})...")
+        targets_list = apply_exponential_smoothing(targets_list, exp_smoothing_alpha)
+        if has_input_covariates:
+            covariates_list = apply_exponential_smoothing(covariates_list, exp_smoothing_alpha)
+        if has_past_covariates:
+            past_covariates_list = apply_exponential_smoothing(past_covariates_list, exp_smoothing_alpha)
+        print(f"[{run_tag}] Exponential smoothing completed.")
+
+    # Capture state after smoothing but BEFORE log/detrend for evaluation if requested
+    smoothed_targets_list = list(targets_list)
 
     if use_log_transform:
         reset_log_transform_storage()
@@ -216,14 +245,27 @@ def run_training(
 
     if shuffle_data:
         random.seed(42)
-        combined = list(zip(targets_list, covariates_list, past_covariates_list, original_targets_list, series_indices))
+        combined = list(zip(
+            targets_list,
+            covariates_list,
+            past_covariates_list,
+            original_targets_list,
+            smoothed_targets_list,
+            series_indices
+        ))
         random.shuffle(combined)
-        targets_list, covariates_list, past_covariates_list, original_targets_list, series_indices = zip(*combined)
+        (targets_list,
+         covariates_list,
+         past_covariates_list,
+         original_targets_list,
+         smoothed_targets_list,
+         series_indices) = zip(*combined)
 
     targets_list = list(targets_list)
     covariates_list = list(covariates_list)
     past_covariates_list = list(past_covariates_list)
     original_targets_list = list(original_targets_list)
+    smoothed_targets_list = list(smoothed_targets_list)
     series_indices = list(series_indices)
 
     n_total = len(targets_list)
@@ -241,8 +283,15 @@ def run_training(
     test_targets = targets_list[split_idx_2:]
     test_covariates = covariates_list[split_idx_2:]
     test_past_covariates = past_covariates_list[split_idx_2:]
-    test_targets_raw = original_targets_list[split_idx_2:]
     test_series_indices = series_indices[split_idx_2:]
+
+    # Select which data set serves as ground truth for metrics
+    if eval_on_smoothed:
+        test_targets_raw = smoothed_targets_list[split_idx_2:]
+        print(f"[{run_tag}] Metrics will be calculated against SMOOTHED ground truth.")
+    else:
+        test_targets_raw = original_targets_list[split_idx_2:]
+        print(f"[{run_tag}] Metrics will be calculated against ORIGINAL RAW ground truth.")
 
     print(f"[{run_tag}] Train blocks: {len(train_targets)}, Val blocks: {len(val_targets)}, Test blocks: {len(test_targets)}")
 
@@ -444,6 +493,8 @@ def run_training(
                     for forecast_start in range(max_input_chunk_length, len(ts_target) - output_chunk_length + 1, stride):
                         input_start = forecast_start - input_chunk_length
                         y_train = ts_target[input_start: forecast_start]
+
+                        # test_targets_raw contains either the raw original data OR the smoothed original data depending on the flag
                         y_true = ts_target_raw[forecast_start: forecast_start + output_chunk_length]
 
                         if name in MODELS_WITH_FUTURE_COVARIATES:
@@ -604,6 +655,17 @@ if __name__ == "__main__":
         default=0,
         help="If > 0, calculates moving average column names. Target MAs are added to PAST_COLS to prevent data leakage.",
     )
+    parser.add_argument(
+        "--exp-smoothing-alpha",
+        type=float,
+        default=None,
+        help="Apply exponential smoothing with the given alpha (0 < alpha <= 1) to all variables before training.",
+    )
+    parser.add_argument(
+        "--eval-on-smoothed",
+        action="store_true",
+        help="If passed, evaluation metrics (MAE, RMSE, MAPE) are calculated against the smoothed data instead of the raw data.",
+    )
     args = parser.parse_args()
 
     # Apply MA Window configurations if requested
@@ -653,7 +715,7 @@ if __name__ == "__main__":
     use_log_transform = args.use_log_transform
     shuffle_data = args.shuffle
 
-    print(f"use_detrend={use_detrend}, use_log_transform={use_log_transform}, ma_window={args.ma_window}")
+    print(f"use_detrend={use_detrend}, use_log_transform={use_log_transform}, ma_window={args.ma_window}, exp_smoothing_alpha={args.exp_smoothing_alpha}, eval_on_smoothed={args.eval_on_smoothed}")
 
     os.makedirs("outputs", exist_ok=True)
 
@@ -676,6 +738,8 @@ if __name__ == "__main__":
             use_detrend=use_detrend,
             use_log_transform=use_log_transform,
             shuffle_data=shuffle_data,
+            exp_smoothing_alpha=args.exp_smoothing_alpha,
+            eval_on_smoothed=args.eval_on_smoothed,
             model_names=model_names,
             exclude_model_names=exclude_model_names,
             model_groups=model_groups,
@@ -692,6 +756,8 @@ if __name__ == "__main__":
                 use_detrend=use_detrend,
                 use_log_transform=use_log_transform,
                 shuffle_data=shuffle_data,
+                exp_smoothing_alpha=args.exp_smoothing_alpha,
+                eval_on_smoothed=args.eval_on_smoothed,
                 model_names=model_names,
                 exclude_model_names=exclude_model_names,
                 model_groups=model_groups,
@@ -710,6 +776,8 @@ if __name__ == "__main__":
             use_detrend=use_detrend,
             use_log_transform=use_log_transform,
             shuffle_data=shuffle_data,
+            exp_smoothing_alpha=args.exp_smoothing_alpha,
+            eval_on_smoothed=args.eval_on_smoothed,
             model_names=model_names,
             exclude_model_names=exclude_model_names,
             model_groups=model_groups,
