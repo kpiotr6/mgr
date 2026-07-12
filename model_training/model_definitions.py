@@ -256,8 +256,8 @@ def get_models(
             input_chunk_length=input_chunk_length,
             output_chunk_length=output_chunk_length,
             model_kwargs={
-                "n_block": 8,
-                "ff_dim": 128,
+                "n_block": 4,
+                "ff_dim": 64,
                 "dropout": 0.1,
                 "lr_scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau,
                 "lr_scheduler_kwargs": {"mode": "min", "factor": 0.5, "patience": 10},

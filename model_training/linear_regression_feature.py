@@ -75,7 +75,7 @@ def run_forward_selection():
     split_idx_2 = int(n_total * 0.85)
 
     train_dfs = all_dfs[:split_idx_1]
-    val_dfs = all_dfs[split_idx_1:split_idx_2]
+    val_dfs = all_dfs[split_idx_2:n_total]
 
     # 4. Global Scaler for Covariates (Independent of target scaler)
     all_feature_cols = list(set(TARGET_COLS + PAST_COLS + INPUT_COLS))
@@ -161,23 +161,25 @@ def run_forward_selection():
                             if len(ts_val_scaled) < in_chunk + out_chunk:
                                 continue
 
-                            y_train = ts_val_scaled[:in_chunk]
-                            y_true = val_target_raw[i][in_chunk:in_chunk+out_chunk]
+                            # Iterate over the whole timeseries with stride=1
+                            for j in range(len(ts_val_scaled) - in_chunk - out_chunk + 1):
+                                y_train = ts_val_scaled[j : j + in_chunk]
+                                y_true = val_target_raw[i][j + in_chunk : j + in_chunk + out_chunk]
 
-                            pred_kwargs = {
-                                "n": out_chunk,
-                                "series": y_train,
-                                "verbose": False
-                            }
-                            if val_p: pred_kwargs["past_covariates"] = val_p[i]
-                            if val_f: pred_kwargs["future_covariates"] = val_f[i]
+                                pred_kwargs = {
+                                    "n": out_chunk,
+                                    "series": y_train,
+                                    "verbose": False
+                                }
+                                if val_p: pred_kwargs["past_covariates"] = val_p[i][j : j + in_chunk]
+                                if val_f: pred_kwargs["future_covariates"] = val_f[i][j : j + in_chunk + out_chunk]
 
-                            pred_scaled = model.predict(**pred_kwargs)
+                                pred_scaled = model.predict(**pred_kwargs)
 
-                            # Inverse transform prediction using the isolated target scaler
-                            pred = target_scaler.inverse_transform(pred_scaled)
+                                # Inverse transform prediction using the isolated target scaler
+                                pred = target_scaler.inverse_transform(pred_scaled)
 
-                            current_maes.append(mae(y_true, pred))
+                                current_maes.append(mae(y_true, pred))
 
                         if not current_maes:
                             continue
