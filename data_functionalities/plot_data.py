@@ -3,6 +3,13 @@ import matplotlib.pyplot as plt
 import os
 import glob
 
+features_to_plot = [
+    'return',
+    "clinker_1_feedrate",
+    "clinker_2_feedrate",
+    "circulation_fan_speed",
+    "separator_speed"
+]
 
 def save_plot(df, y_cols, title, plot_path):
     scaled_df = df[y_cols].copy()
@@ -42,7 +49,7 @@ def main():
 
         cols_to_drop = ['is_at_edge', 'time', 'sequence_index']
         # Also drop any Unnamed columns that might have slipped in
-        y_cols = [col for col in df.columns if col not in cols_to_drop and not col.startswith('Unnamed')]
+        y_cols = [col for col in features_to_plot if col in df.columns]
 
         if 'session_index' in df.columns:
             session_change_group = (df['session_index'] != df['session_index'].shift()).cumsum()

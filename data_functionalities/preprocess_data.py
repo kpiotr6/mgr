@@ -56,6 +56,7 @@ def preprocess_file(
     input_file: Path,
     output_file: Path,
     ma_window: int = 0,
+    subsample_window: int = 0,
     check_gran_empty: bool = False
 ) -> tuple[int, int]:
     df = pd.read_csv(input_file)
@@ -84,7 +85,15 @@ def preprocess_file(
         if session_df.empty:
             continue
 
-        processed_sessions.append(_normalize_session_frame(session_df))
+        session_df = _normalize_session_frame(session_df)
+
+        if subsample_window > 1:
+            subsampled_sessions = session_df.groupby(session_df.index // subsample_window, sort=True).mean(numeric_only=True)
+            subsampled_sessions[SESSION_COL] = int(session_df[SESSION_COL].iloc[0])
+            subsampled_sessions[TIME_COL] = range(1, len(subsampled_sessions) + 1)
+            session_df = subsampled_sessions[OUTPUT_COLS].reset_index(drop=True)
+
+        processed_sessions.append(session_df)
 
     if not processed_sessions:
         raise ValueError(
@@ -115,6 +124,7 @@ def main() -> None:
     parser.add_argument("--input-dir", default="data", help="Folder with raw CSV files.")
     parser.add_argument("--output-dir", default="data_preprocessed", help="Folder for processed CSV files.")
     parser.add_argument("--ma-window", type=int, default=0, help="Moving average window length. 0 (default) disables it.")
+    parser.add_argument("--subsample-window", type=int, default=0, help="Non-overlapping window size for averaging session rows. 0 (default) disables it.")
     parser.add_argument("--check-gran-empty", action="store_true", help="Truncate session when `gran1_blain` hits 0 or is empty/NaN.")
     args = parser.parse_args()
 
@@ -131,6 +141,7 @@ def main() -> None:
             input_file,
             output_file,
             args.ma_window,
+            args.subsample_window,
             args.check_gran_empty
         )
         print(f"{input_file.name}: {original_rows} -> {processed_rows} rows saved to {output_file}")

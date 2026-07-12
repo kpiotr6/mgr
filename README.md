@@ -3,7 +3,7 @@
 Run the script from your terminal:
 
 ```bash
-python preprocess.py --input-dir raw_data --output-dir processed_data --ma-window 5 --check-gran-empty
+python preprocess.py --input-dir raw_data --output-dir processed_data --ma-window 5 --subsample-window 10 --check-gran-empty
 ```
 
 ### Command-Line Arguments
@@ -13,6 +13,7 @@ python preprocess.py --input-dir raw_data --output-dir processed_data --ma-windo
 | `--input-dir` | String | `data` | The directory path containing the raw `.csv` files to process. |
 | `--output-dir` | String | `data_preprocessed` | The directory path where the processed `.csv` files will be saved. |
 | `--ma-window` | Integer | `0` | The rolling window length for computing moving averages. `0` disables this feature. |
+| `--subsample-window` | Integer | `0` | The non-overlapping window size used to average session rows. `0` disables this feature. |
 |
 | `--check-gran-empty` | Flag | `False` | Truncates each session at the first instance where `gran1_blain` is `0` or `NaN`. |
 

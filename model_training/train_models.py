@@ -47,6 +47,11 @@ from model_training.model_definitions import (
 )
 
 
+input_chunk_lengths = [6]
+output_chunk_lengths = [2]
+min_series_length = max(input_chunk_lengths) + max(output_chunk_lengths)
+print(min_series_length)
+
 _MODEL_GROUPS: dict[str, set[str]] = {
     "naive": set(NAIVE_MODELS),
     "checkpoint": set(CHECKPOINT_MODELS),
@@ -130,7 +135,7 @@ def load_data(
     for _, group_df in df.groupby(group_id):
         group_df = group_df.sort_values(TIME_COL).drop_duplicates(subset=[TIME_COL])
 
-        if len(group_df) < 720:
+        if len(group_df) <= min_series_length:
             continue
 
         # Create targets TimeSeries
@@ -178,7 +183,9 @@ def run_training(
     exclude_model_names: set[str] | None = None,
     model_groups: set[str] | None = None,
     max_files_to_load: int | None = None,
+    artifact_group: str | None = None,
 ):
+    artifact_group = artifact_group or run_tag
     has_input_covariates = len(input_cols) > 0
     has_past_covariates = len(past_cols) > 0
 
@@ -340,8 +347,6 @@ def run_training(
     test_covariates_scaled = covariates_scaler.transform(test_covariates) if has_input_covariates else [None] * len(test_targets)
     test_past_covariates_scaled = past_covariates_scaler.transform(test_past_covariates) if has_past_covariates else [None] * len(test_targets)
 
-    input_chunk_lengths = [60, 120]
-    output_chunk_lengths = [30, 60, 120]
     all_results = []
     best_models_dict = {}
     true_windows_for_chunk = []
@@ -357,6 +362,7 @@ def run_training(
                 output_chunk_length,
                 input_cols=input_cols,
                 past_cols=past_cols,
+                run_group=artifact_group,
             )
             models = _filter_models(
                 models,
@@ -489,7 +495,7 @@ def run_training(
                     if len(ts_target) <= max_input_chunk_length + output_chunk_length:
                         continue
 
-                    stride = 6
+                    stride = 1
                     for forecast_start in range(max_input_chunk_length, len(ts_target) - output_chunk_length + 1, stride):
                         input_start = forecast_start - input_chunk_length
                         y_train = ts_target[input_start: forecast_start]
@@ -735,6 +741,7 @@ if __name__ == "__main__":
             input_cols=INPUT_COLS,
             past_cols=PAST_COLS,
             run_tag="all_targets",
+            artifact_group="all_targets",
             use_detrend=use_detrend,
             use_log_transform=use_log_transform,
             shuffle_data=shuffle_data,
@@ -753,6 +760,7 @@ if __name__ == "__main__":
                 input_cols=cfg.get("input", []),
                 past_cols=cfg.get("past", []),
                 run_tag=f"target_{target}",
+                artifact_group="per_target",
                 use_detrend=use_detrend,
                 use_log_transform=use_log_transform,
                 shuffle_data=shuffle_data,
@@ -773,6 +781,7 @@ if __name__ == "__main__":
             input_cols=simple_input_cols,
             past_cols=simple_past_cols,
             run_tag="simple_model",
+            artifact_group="simple",
             use_detrend=use_detrend,
             use_log_transform=use_log_transform,
             shuffle_data=shuffle_data,
