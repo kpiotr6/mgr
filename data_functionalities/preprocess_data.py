@@ -57,8 +57,10 @@ def preprocess_file(
     output_file: Path,
     ma_window: int = 0,
     subsample_window: int = 0,
+    subsample_method: str = "mean",
     check_gran_empty: bool = False,
-    chunk_size: int = 0
+    chunk_size: int = 0,
+    zero_negatives: bool = False
 ) -> tuple[int, int, pd.Series]:
     df = pd.read_csv(input_file)
 
@@ -67,6 +69,12 @@ def preprocess_file(
         raise ValueError(f"{input_file.name} is missing columns: {missing_columns}")
 
     df = df[OUTPUT_COLS].copy()
+
+    # Clip any numeric values < 0 to 0 if flag is passed
+    if zero_negatives:
+        numeric_cols = df.select_dtypes(include=["number"]).columns
+        df[numeric_cols] = df[numeric_cols].clip(lower=0)
+
     df[SESSION_COL] = pd.to_numeric(df[SESSION_COL], errors="coerce")
     if df[SESSION_COL].isna().any():
         raise ValueError(f"{input_file.name} contains non-numeric `session_index` values.")
@@ -91,7 +99,13 @@ def preprocess_file(
         session_df = _normalize_session_frame(session_df)
 
         if subsample_window > 1:
-            subsampled_sessions = session_df.groupby(session_df.index // subsample_window, sort=True).mean(numeric_only=True)
+            grouped_sessions = session_df.groupby(session_df.index // subsample_window, sort=True)
+
+            if subsample_method == "median":
+                subsampled_sessions = grouped_sessions.median(numeric_only=True)
+            else:
+                subsampled_sessions = grouped_sessions.mean(numeric_only=True)
+
             subsampled_sessions[SESSION_COL] = int(session_df[SESSION_COL].iloc[0])
             subsampled_sessions[TIME_COL] = range(1, len(subsampled_sessions) + 1)
             session_df = subsampled_sessions[OUTPUT_COLS].reset_index(drop=True)
@@ -141,8 +155,10 @@ def main() -> None:
     parser.add_argument("--output-dir", default="data_preprocessed", help="Folder for processed CSV files.")
     parser.add_argument("--ma-window", type=int, default=0, help="Moving average window length. 0 (default) disables it.")
     parser.add_argument("--subsample-window", type=int, default=0, help="Non-overlapping window size for averaging session rows. 0 (default) disables it.")
+    parser.add_argument("--subsample-method", type=str, choices=["mean", "median"], default="mean", help="Aggregation method for subsampling: 'mean' or 'median'.")
     parser.add_argument("--check-gran-empty", action="store_true", help="Truncate session when `gran1_blain` hits 0 or is empty/NaN.")
     parser.add_argument("--chunk-size", type=int, default=0, help="Divide sequences into smaller non-overlapping chunks of this exact size. Smaller leftovers are discarded. 0 (default) disables it.")
+    parser.add_argument("--zero-negatives", action="store_true", help="Replace any values < 0 in any column with 0.")
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir)
@@ -159,12 +175,14 @@ def main() -> None:
     for input_file in csv_files:
         output_file = output_dir / input_file.name
         original_rows, processed_rows, session_lengths = preprocess_file(
-            input_file,
-            output_file,
-            args.ma_window,
-            args.subsample_window,
-            args.check_gran_empty,
-            args.chunk_size
+            input_file=input_file,
+            output_file=output_file,
+            ma_window=args.ma_window,
+            subsample_window=args.subsample_window,
+            subsample_method=args.subsample_method,
+            check_gran_empty=args.check_gran_empty,
+            chunk_size=args.chunk_size,
+            zero_negatives=args.zero_negatives
         )
 
         all_session_lengths.append(session_lengths)

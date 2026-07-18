@@ -47,8 +47,8 @@ from model_training.model_definitions import (
 )
 
 
-input_chunk_lengths = [6]
-output_chunk_lengths = [2]
+input_chunk_lengths = [2, 4, 6, 8]
+output_chunk_lengths = [1, 2, 3]
 min_series_length = max(input_chunk_lengths) + max(output_chunk_lengths)
 print(min_series_length)
 
@@ -184,6 +184,7 @@ def run_training(
     model_groups: set[str] | None = None,
     max_files_to_load: int | None = None,
     artifact_group: str | None = None,
+    use_builtin_scalers: bool = False,
 ):
     artifact_group = artifact_group or run_tag
     has_input_covariates = len(input_cols) > 0
@@ -302,12 +303,40 @@ def run_training(
 
     print(f"[{run_tag}] Train blocks: {len(train_targets)}, Val blocks: {len(val_targets)}, Test blocks: {len(test_targets)}")
 
-    target_scaler = Scaler(global_fit=True)
-    covariates_scaler = Scaler(global_fit=True) if has_input_covariates else None
-    past_covariates_scaler = Scaler(global_fit=True) if has_past_covariates else None
+    if not use_builtin_scalers:
+        target_scaler = Scaler(global_fit=True)
+        covariates_scaler = Scaler(global_fit=True) if has_input_covariates else None
+        past_covariates_scaler = Scaler(global_fit=True) if has_past_covariates else None
+
+        train_targets_scaled = target_scaler.fit_transform(train_targets)
+        train_covariates_scaled = covariates_scaler.fit_transform(train_covariates) if has_input_covariates else [None] * len(train_targets)
+        train_past_covariates_scaled = past_covariates_scaler.fit_transform(train_past_covariates) if has_past_covariates else [None] * len(train_targets)
+
+        val_targets_scaled = target_scaler.transform(val_targets)
+        val_covariates_scaled = covariates_scaler.transform(val_covariates) if has_input_covariates else [None] * len(val_targets)
+        val_past_covariates_scaled = past_covariates_scaler.transform(val_past_covariates) if has_past_covariates else [None] * len(val_targets)
+
+        test_targets_scaled = target_scaler.transform(test_targets)
+        test_covariates_scaled = covariates_scaler.transform(test_covariates) if has_input_covariates else [None] * len(test_targets)
+        test_past_covariates_scaled = past_covariates_scaler.transform(test_past_covariates) if has_past_covariates else [None] * len(test_targets)
+    else:
+        target_scaler, covariates_scaler, past_covariates_scaler = None, None, None
+        train_targets_scaled = train_targets
+        train_covariates_scaled = train_covariates if has_input_covariates else [None] * len(train_targets)
+        train_past_covariates_scaled = train_past_covariates if has_past_covariates else [None] * len(train_targets)
+
+        val_targets_scaled = val_targets
+        val_covariates_scaled = val_covariates if has_input_covariates else [None] * len(val_targets)
+        val_past_covariates_scaled = val_past_covariates if has_past_covariates else [None] * len(val_targets)
+
+        test_targets_scaled = test_targets
+        test_covariates_scaled = test_covariates if has_input_covariates else [None] * len(test_targets)
+        test_past_covariates_scaled = test_past_covariates if has_past_covariates else [None] * len(test_targets)
 
     def persist_scalers(model_name: str) -> None:
         """Save scalers next to the Darts checkpoint folder."""
+        if use_builtin_scalers:
+            return
         out_path = Path("darts_logs") / model_name / "scalers.pkl"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         bundle = {
@@ -335,18 +364,6 @@ def run_training(
 
         model_obj.save(str(out_path))
 
-    train_targets_scaled = target_scaler.fit_transform(train_targets)
-    train_covariates_scaled = covariates_scaler.fit_transform(train_covariates) if has_input_covariates else [None] * len(train_targets)
-    train_past_covariates_scaled = past_covariates_scaler.fit_transform(train_past_covariates) if has_past_covariates else [None] * len(train_targets)
-
-    val_targets_scaled = target_scaler.transform(val_targets)
-    val_covariates_scaled = covariates_scaler.transform(val_covariates) if has_input_covariates else [None] * len(val_targets)
-    val_past_covariates_scaled = past_covariates_scaler.transform(val_past_covariates) if has_past_covariates else [None] * len(val_targets)
-
-    test_targets_scaled = target_scaler.transform(test_targets)
-    test_covariates_scaled = covariates_scaler.transform(test_covariates) if has_input_covariates else [None] * len(test_targets)
-    test_past_covariates_scaled = past_covariates_scaler.transform(test_past_covariates) if has_past_covariates else [None] * len(test_targets)
-
     all_results = []
     best_models_dict = {}
     true_windows_for_chunk = []
@@ -363,6 +380,7 @@ def run_training(
                 input_cols=input_cols,
                 past_cols=past_cols,
                 run_group=artifact_group,
+                use_builtin_scalers=use_builtin_scalers,
             )
             models = _filter_models(
                 models,
@@ -467,10 +485,13 @@ def run_training(
 
                         train_preds_scaled = model.predict(**predict_kwargs)
 
-                        if isinstance(train_preds_scaled, list):
-                            train_preds = target_scaler.inverse_transform(train_preds_scaled)
+                        if not use_builtin_scalers:
+                            if isinstance(train_preds_scaled, list):
+                                train_preds = target_scaler.inverse_transform(train_preds_scaled)
+                            else:
+                                train_preds = target_scaler.inverse_transform([train_preds_scaled])
                         else:
-                            train_preds = target_scaler.inverse_transform([train_preds_scaled])
+                            train_preds = train_preds_scaled if isinstance(train_preds_scaled, list) else [train_preds_scaled]
 
                         true_train = [t[-output_chunk_length:] for t in train_targets if len(t) > input_chunk_length + output_chunk_length]
                         train_mae = mae(true_train, train_preds)
@@ -529,7 +550,10 @@ def run_training(
                         else:
                             pred_scaled = model.predict(n=output_chunk_length, series=y_train, verbose=False)
 
-                        pred = target_scaler.inverse_transform(pred_scaled)
+                        if not use_builtin_scalers:
+                            pred = target_scaler.inverse_transform(pred_scaled)
+                        else:
+                            pred = pred_scaled
 
                         if use_detrend:
                             pred_retrended = reverse_detrend_timeseries([pred], ts_indices=[ts_original_idx])
@@ -672,6 +696,11 @@ if __name__ == "__main__":
         action="store_true",
         help="If passed, evaluation metrics (MAE, RMSE, MAPE) are calculated against the smoothed data instead of the raw data.",
     )
+    parser.add_argument(
+        "--use-builtin-scalers",
+        action="store_true",
+        help="Skip external scalers and use models' built-in scalers (robust_statistics).",
+    )
     args = parser.parse_args()
 
     # Apply MA Window configurations if requested
@@ -720,8 +749,9 @@ if __name__ == "__main__":
     use_detrend = args.use_detrend
     use_log_transform = args.use_log_transform
     shuffle_data = args.shuffle
+    use_builtin_scalers = args.use_builtin_scalers
 
-    print(f"use_detrend={use_detrend}, use_log_transform={use_log_transform}, ma_window={args.ma_window}, exp_smoothing_alpha={args.exp_smoothing_alpha}, eval_on_smoothed={args.eval_on_smoothed}")
+    print(f"use_detrend={use_detrend}, use_log_transform={use_log_transform}, ma_window={args.ma_window}, exp_smoothing_alpha={args.exp_smoothing_alpha}, eval_on_smoothed={args.eval_on_smoothed}, use_builtin_scalers={use_builtin_scalers}")
 
     os.makedirs("outputs", exist_ok=True)
 
@@ -751,6 +781,7 @@ if __name__ == "__main__":
             exclude_model_names=exclude_model_names,
             model_groups=model_groups,
             max_files_to_load=max_files_to_load,
+            use_builtin_scalers=use_builtin_scalers,
         )
 
     if "per_target" in runs:
@@ -770,6 +801,7 @@ if __name__ == "__main__":
                 exclude_model_names=exclude_model_names,
                 model_groups=model_groups,
                 max_files_to_load=max_files_to_load,
+                use_builtin_scalers=use_builtin_scalers,
             )
 
     if "simple" in runs:
@@ -791,4 +823,5 @@ if __name__ == "__main__":
             exclude_model_names=exclude_model_names,
             model_groups=model_groups,
             max_files_to_load=max_files_to_load,
+            use_builtin_scalers=use_builtin_scalers,
         )
