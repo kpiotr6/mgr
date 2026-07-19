@@ -2,37 +2,40 @@ PER_TARGET_CONFIG = {
   "return": {
     "past": [
       "ashes_feedrate",
+      "auger_5_load",
       "elevator_1_load",
       "filter_fan_speed",
       "first_chamber_filling",
-      "glycol",
       "gran1_cv",
-      "gran1_davg_surf",
-      "gran1_dv_10",
-      "gran1_dv_50",
+      "gran1_davg_vol",
+      "gran1_vol_gt_50_um",
       "mill_input_temp",
       "mill_motor_power",
-      "output_vacuum",
-      "second_chamber_filling",
+      "output_devices_power",
+      "separator_input_temp",
       "separator_load",
+      "separator_output_temp",
       "water"
     ],
     "input": [
+      "aspiration_fan_speed",
       "circulation_fan_speed",
       "clinker_1_feedrate",
-      "clinker_2_feedrate",
+      "fresh_feed_setpoint",
       "gypsum_feedrate",
       "separator_speed",
-      "stone_slag_feedrate",
+      "stone_slag_feedrate"
     ]
   },
   "first_chamber_filling": {
     "past": [
       "ashes_feedrate",
       "gran1_dv_50",
-      "gran1_vol_lt_5_um",
+      "gran1_vol_lt_32_um",
+      "gran2_blain",
       "input_sum",
       "mill_motor_power",
+      "mill_output_temp",
       "output_vacuum",
       "separator_output_temp",
       "water"
@@ -45,27 +48,26 @@ PER_TARGET_CONFIG = {
   },
   "second_chamber_filling": {
     "past": [
-      "filter_fan_speed",
-      "mill_output_temp",
-      "output_devices_power"
+      "elevator_1_load",
+      "gran1_cv",
+      "gran1_dv_50",
+      "mill_output_temp"
     ],
     "input": [
       "clinker_1_feedrate",
-      "stone_slag_feedrate"
+      "fresh_air_flap_position"
     ]
   },
   "gran1_blain": {
     "past": [
-      "filter_fan_speed",
-      "gran1_davg_surf",
-      "gran1_obscuration",
-      "gran2_davg_surf",
-      "gran2_vol_gt_100_um",
+      "gran1_cv",
+      "gran2_blain",
+      "mill_motor_power",
       "output_vacuum"
     ],
     "input": [
       "aspiration_fan_speed",
-      "circulation_fan_speed",
+      "fresh_air_flap_position",
       "separator_speed"
     ]
   }
@@ -84,13 +86,17 @@ INPUT_COLS = [
 ]
 
 TARGET_COLS = [
-    "return",
-    "first_chamber_filling",
-    "second_chamber_filling",
+    # "return",
+    # "first_chamber_filling",
+    # "second_chamber_filling",
     "gran1_blain",
 ]
 
 PAST_COLS = [
+        "return",
+    "first_chamber_filling",
+    "second_chamber_filling",
+# "gran1_blain",
     "input_sum",
     'ashes_feedrate',
     'auger_5_load',
