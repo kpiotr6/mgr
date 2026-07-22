@@ -6,7 +6,9 @@ import pandas as pd
 import numpy as np
 import warnings
 import json
+import argparse
 
+from sklearn.preprocessing import PowerTransformer
 from darts import TimeSeries
 from darts.dataprocessing.transformers import Scaler
 from darts.metrics import mae
@@ -42,7 +44,16 @@ def extract_timeseries(dfs: list, cols: list) -> list:
     """Converts a list of dataframes into a list of Darts TimeSeries for specific columns."""
     if not cols:
         return None
-    return [TimeSeries.from_dataframe(df, time_col=TIME_COL, value_cols=cols) for df in dfs]
+    # Added fill_missing_dates=True and freq=None to handle index gaps automatically
+    return [
+        TimeSeries.from_dataframe(
+            df,
+            time_col=TIME_COL,
+            value_cols=cols,
+            fill_missing_dates=True,
+            freq=None
+        ) for df in dfs
+    ]
 
 def slice_timeseries(ts_list: list, cols: list) -> list:
     """Helper to slice specific columns from a list of TimeSeries."""
@@ -50,7 +61,7 @@ def slice_timeseries(ts_list: list, cols: list) -> list:
         return None
     return [ts[cols] for ts in ts_list]
 
-def run_forward_selection():
+def run_forward_selection(split_per_session: bool = False, use_box_cox: bool = False):
     # 1. Define windows and parameters
     input_chunk_lengths = [6]
     output_chunk_lengths = [2]
@@ -69,13 +80,34 @@ def run_forward_selection():
 
     print(f"Total loaded series blocks: {len(all_dfs)}")
 
-    # 3. Train/Val Split (70% train, 15% val, ignoring test for feature selection)
+    # 3. Train/Val Split
     n_total = len(all_dfs)
-    split_idx_1 = int(n_total * 0.7)
-    split_idx_2 = int(n_total * 0.85)
 
-    train_dfs = all_dfs[:split_idx_1]
-    val_dfs = all_dfs[split_idx_2:n_total]
+    if split_per_session:
+        print("Splitting EACH session temporally into Train/Val...")
+        train_dfs = []
+        val_dfs = []
+
+        for df in all_dfs:
+            L = len(df)
+            s1 = int(L * 0.7)
+            s2 = int(L * 0.85)
+
+            # The last 15% (s2 onwards) would be the test set, but it is ignored for feature selection
+            train_slice = df.iloc[:s1]
+            val_slice = df.iloc[s1:s2]
+
+            # Prevent short slices from crashing the TimeSeries initialization
+            if len(train_slice) > min_series_length:
+                train_dfs.append(train_slice)
+            if len(val_slice) > min_series_length:
+                val_dfs.append(val_slice)
+    else:
+        split_idx_1 = int(n_total * 0.7)
+        split_idx_2 = int(n_total * 0.85)
+
+        train_dfs = all_dfs[:split_idx_1]
+        val_dfs = all_dfs[split_idx_1:split_idx_2]
 
     # 4. Global Scaler for Covariates (Independent of target scaler)
     all_feature_cols = list(set(TARGET_COLS + PAST_COLS + INPUT_COLS))
@@ -83,7 +115,11 @@ def run_forward_selection():
     train_ts_all = extract_timeseries(train_dfs, all_feature_cols)
     val_ts_all = extract_timeseries(val_dfs, all_feature_cols)
 
-    cov_scaler = Scaler(global_fit=True)
+    if use_box_cox:
+        cov_scaler = Scaler(scaler=PowerTransformer(method='yeo-johnson'), global_fit=True)
+    else:
+        cov_scaler = Scaler(global_fit=True)
+
     train_scaled = cov_scaler.fit_transform(train_ts_all)
     val_scaled = cov_scaler.transform(val_ts_all)
 
@@ -96,7 +132,11 @@ def run_forward_selection():
         target_best_config = {"past": [], "input": []}
 
         # Dedicated scaler strictly for the current target
-        target_scaler = Scaler(global_fit=True)
+        if use_box_cox:
+            target_scaler = Scaler(scaler=PowerTransformer(method='yeo-johnson'), global_fit=True)
+        else:
+            target_scaler = Scaler(global_fit=True)
+
         train_target_raw = extract_timeseries(train_dfs, [target])
         val_target_raw = extract_timeseries(val_dfs, [target])
 
@@ -236,4 +276,20 @@ def run_forward_selection():
     print_list_block("PAST_COLS", PAST_COLS)
 
 if __name__ == "__main__":
-    run_forward_selection()
+    parser = argparse.ArgumentParser(description="Run forward feature selection.")
+    parser.add_argument(
+        "--split-per-session",
+        action="store_true",
+        help="Divide each session temporally into train (70%) and val (15%) instead of splitting the entire list of sessions.",
+    )
+    parser.add_argument(
+        "--use-box-cox",
+        action="store_true",
+        help="Apply PowerTransformer (Yeo-Johnson) before evaluating features.",
+    )
+    args = parser.parse_args()
+
+    run_forward_selection(
+        split_per_session=args.split_per_session,
+        use_box_cox=args.use_box_cox
+    )

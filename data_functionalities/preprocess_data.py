@@ -60,7 +60,8 @@ def preprocess_file(
     subsample_method: str = "mean",
     check_gran_empty: bool = False,
     chunk_size: int = 0,
-    zero_negatives: bool = False
+    zero_negatives: bool = False,
+    replace_target_zeros: bool = False
 ) -> tuple[int, int, pd.Series]:
     df = pd.read_csv(input_file)
 
@@ -74,6 +75,12 @@ def preprocess_file(
     if zero_negatives:
         numeric_cols = df.select_dtypes(include=["number"]).columns
         df[numeric_cols] = df[numeric_cols].clip(lower=0)
+
+    # Replace 0s in TARGET_COLS with 0.1 if flag is passed
+    if replace_target_zeros:
+        target_cols_present = [col for col in TARGET_COLS if col in df.columns]
+        for col in target_cols_present:
+            df.loc[df[col] == 0, col] = 0.1
 
     df[SESSION_COL] = pd.to_numeric(df[SESSION_COL], errors="coerce")
     if df[SESSION_COL].isna().any():
@@ -159,6 +166,7 @@ def main() -> None:
     parser.add_argument("--check-gran-empty", action="store_true", help="Truncate session when `gran1_blain` hits 0 or is empty/NaN.")
     parser.add_argument("--chunk-size", type=int, default=0, help="Divide sequences into smaller non-overlapping chunks of this exact size. Smaller leftovers are discarded. 0 (default) disables it.")
     parser.add_argument("--zero-negatives", action="store_true", help="Replace any values < 0 in any column with 0.")
+    parser.add_argument("--replace-target-zeros", action="store_true", help="Replace any values of exactly 0 in TARGET_COLS with 0.1.")
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir)
@@ -182,7 +190,8 @@ def main() -> None:
             subsample_method=args.subsample_method,
             check_gran_empty=args.check_gran_empty,
             chunk_size=args.chunk_size,
-            zero_negatives=args.zero_negatives
+            zero_negatives=args.zero_negatives,
+            replace_target_zeros=args.replace_target_zeros
         )
 
         all_session_lengths.append(session_lengths)

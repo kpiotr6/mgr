@@ -246,8 +246,8 @@ def get_models(
             input_chunk_length=input_chunk_length,
             output_chunk_length=output_chunk_length,
             loss_fn=RMSE(),
-            n_epochs=40,
-            batch_size=128,
+            n_epochs=30,
+            batch_size=1024,
             optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
             model_kwargs=_configure_model_kwargs({
                 # Size modifications for BiTCN
@@ -275,7 +275,7 @@ def get_models(
                 "lr_scheduler_kwargs": {"mode": "min", "factor": 0.5, "patience": 10},
             }),
             loss_fn=RMSE(),
-            n_epochs=40,
+            n_epochs=30,
             batch_size=1024,
             optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
             pl_trainer_kwargs=_build_nf_trainer_kwargs(artifact_root, "NF_TSMIXER"),
@@ -288,7 +288,7 @@ def get_models(
             input_chunk_length=input_chunk_length,
             output_chunk_length=output_chunk_length,
             loss_fn=RMSE(),
-            n_epochs=40,
+            n_epochs=30,
             batch_size=1024,
             optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
             model_kwargs=_configure_model_kwargs({
@@ -312,7 +312,7 @@ def get_models(
             input_chunk_length=input_chunk_length,
             output_chunk_length=output_chunk_length,
             loss_fn=RMSE(),
-            n_epochs=40,
+            n_epochs=30,
             batch_size=1024,
             optimizer_kwargs={"lr": 1e-2, "weight_decay": 1e-4},
             model_kwargs=_configure_model_kwargs({
@@ -334,15 +334,15 @@ def get_models(
             input_chunk_length=input_chunk_length,
             output_chunk_length=output_chunk_length,
             loss_fn=RMSE(),
-            n_epochs=40,
-            batch_size=1024,
+            n_epochs=30,
+            batch_size=512,
             optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
             model_kwargs=_configure_model_kwargs({
                 # Size modifications for Temporal Fusion Transformer
                 "hidden_size": 512,               # Dimensionality of the hidden state in LSTM / self-attention layers
-                "n_head": 8,                      # Number of attention heads for the Temporal Fusion Decoder
-                "dropout": 0.1,                   # Dropout probability
-                "attn_dropout": 0.1,              # Dropout probability for the attention mechanisms
+                "n_head": 16,                      # Number of attention heads for the Temporal Fusion Decoder
+                # "dropout": 0.1,                   # Dropout probability
+                # "attn_dropout": 0.1,              # Dropout probability for the attention mechanisms
 
                 "lr_scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau,
                 "lr_scheduler_kwargs": {"mode": "min", "factor": 0.5, "patience": 2},

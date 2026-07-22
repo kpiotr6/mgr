@@ -12,6 +12,7 @@ import logging
 import pickle
 from pathlib import Path
 import numpy as np
+from sklearn.preprocessing import PowerTransformer
 
 warnings.filterwarnings("ignore")
 logging.getLogger("pytorch_lightning").setLevel(logging.ERROR)
@@ -27,6 +28,10 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from config import INPUT_COLS, PAST_COLS, TARGET_COLS, TIME_COL, PER_TARGET_CONFIG
 from config import SIMPLE_MODEL_CONFIG
+try:
+    from config import BOUNDS
+except ImportError:
+    BOUNDS = {}
 
 from model_training.detrend_data import (
     detrend_timeseries_linear,
@@ -47,8 +52,9 @@ from model_training.model_definitions import (
 )
 
 
-input_chunk_lengths = [2, 4, 6, 8]
+input_chunk_lengths = [2, 8, 6, 8]
 output_chunk_lengths = [1, 2, 3]
+
 min_series_length = max(input_chunk_lengths) + max(output_chunk_lengths)
 print(min_series_length)
 
@@ -104,7 +110,7 @@ def apply_exponential_smoothing(ts_list: list, alpha: float) -> list:
         else:
             df = ts.to_dataframe()
             df_smoothed = df.ewm(alpha=alpha, adjust=False).mean()
-            smoothed.append(TimeSeries.from_dataframe(df_smoothed))
+            smoothed.append(TimeSeries.from_dataframe(df_smoothed, fill_missing_dates=True, freq=None))
     return smoothed
 
 
@@ -143,6 +149,8 @@ def load_data(
             group_df,
             time_col=TIME_COL,
             value_cols=target_cols,
+            fill_missing_dates=True,
+            freq=None
         )
         targets.append(target_ts)
 
@@ -153,6 +161,8 @@ def load_data(
                 group_df,
                 time_col=TIME_COL,
                 value_cols=input_cols,
+                fill_missing_dates=True,
+                freq=None
             )
         covariates.append(cov_ts)
 
@@ -163,6 +173,8 @@ def load_data(
                 group_df,
                 time_col=TIME_COL,
                 value_cols=past_cols,
+                fill_missing_dates=True,
+                freq=None
             )
         past_covariates.append(past_cov_ts)
 
@@ -176,6 +188,7 @@ def run_training(
     run_tag: str,
     use_detrend: bool,
     use_log_transform: bool,
+    use_box_cox: bool,
     shuffle_data: bool,
     exp_smoothing_alpha: float | None = None,
     eval_on_smoothed: bool = False,
@@ -185,6 +198,9 @@ def run_training(
     max_files_to_load: int | None = None,
     artifact_group: str | None = None,
     use_builtin_scalers: bool = False,
+    split_per_session: bool = False,
+    disable_mape: bool = False,
+    clip_predictions: bool = False,
 ):
     artifact_group = artifact_group or run_tag
     has_input_covariates = len(input_cols) > 0
@@ -277,31 +293,134 @@ def run_training(
     series_indices = list(series_indices)
 
     n_total = len(targets_list)
-    split_idx_1 = int(n_total * 0.7)
-    split_idx_2 = int(n_total * 0.85)
 
-    train_targets = targets_list[:split_idx_1]
-    train_covariates = covariates_list[:split_idx_1]
-    train_past_covariates = past_covariates_list[:split_idx_1]
+    if split_per_session:
+        print(f"[{run_tag}] Splitting EACH session temporally into Train/Val/Test...")
+        train_targets, val_targets, test_targets = [], [], []
+        train_covariates, val_covariates, test_covariates = [], [], []
+        train_past_covariates, val_past_covariates, test_past_covariates = [], [], []
+        test_series_indices = []
+        test_targets_raw = []
 
-    val_targets = targets_list[split_idx_1:split_idx_2]
-    val_covariates = covariates_list[split_idx_1:split_idx_2]
-    val_past_covariates = past_covariates_list[split_idx_1:split_idx_2]
+        for i in range(n_total):
+            ts = targets_list[i]
+            L = len(ts)
+            s1 = int(L * 0.7)
+            s2 = int(L * 0.85)
 
-    test_targets = targets_list[split_idx_2:]
-    test_covariates = covariates_list[split_idx_2:]
-    test_past_covariates = past_covariates_list[split_idx_2:]
-    test_series_indices = series_indices[split_idx_2:]
+            if s1 == 0 or s2 == s1 or s2 == L:
+                continue
 
-    # Select which data set serves as ground truth for metrics
-    if eval_on_smoothed:
-        test_targets_raw = smoothed_targets_list[split_idx_2:]
-        print(f"[{run_tag}] Metrics will be calculated against SMOOTHED ground truth.")
+            train_targets.append(ts[:s1])
+            val_targets.append(ts[s1:s2])
+            test_targets.append(ts[s2:])
+
+            if covariates_list[i] is not None:
+                train_covariates.append(covariates_list[i][:s1])
+                val_covariates.append(covariates_list[i][s1:s2])
+                test_covariates.append(covariates_list[i][s2:])
+            else:
+                train_covariates.append(None)
+                val_covariates.append(None)
+                test_covariates.append(None)
+
+            if past_covariates_list[i] is not None:
+                train_past_covariates.append(past_covariates_list[i][:s1])
+                val_past_covariates.append(past_covariates_list[i][s1:s2])
+                test_past_covariates.append(past_covariates_list[i][s2:])
+            else:
+                train_past_covariates.append(None)
+                val_past_covariates.append(None)
+                test_past_covariates.append(None)
+
+            test_series_indices.append(series_indices[i])
+
+            if eval_on_smoothed:
+                test_targets_raw.append(smoothed_targets_list[i][s2:])
+            else:
+                test_targets_raw.append(original_targets_list[i][s2:])
+
+        if eval_on_smoothed:
+             print(f"[{run_tag}] Metrics will be calculated against SMOOTHED ground truth.")
+        else:
+             print(f"[{run_tag}] Metrics will be calculated against ORIGINAL RAW ground truth.")
+
     else:
-        test_targets_raw = original_targets_list[split_idx_2:]
-        print(f"[{run_tag}] Metrics will be calculated against ORIGINAL RAW ground truth.")
+        split_idx_1 = int(n_total * 0.7)
+        split_idx_2 = int(n_total * 0.85)
 
-    print(f"[{run_tag}] Train blocks: {len(train_targets)}, Val blocks: {len(val_targets)}, Test blocks: {len(test_targets)}")
+        train_targets = targets_list[:split_idx_1]
+        train_covariates = covariates_list[:split_idx_1]
+        train_past_covariates = past_covariates_list[:split_idx_1]
+
+        val_targets = targets_list[split_idx_1:split_idx_2]
+        val_covariates = covariates_list[split_idx_1:split_idx_2]
+        val_past_covariates = past_covariates_list[split_idx_1:split_idx_2]
+
+        test_targets = targets_list[split_idx_2:]
+        test_covariates = covariates_list[split_idx_2:]
+        test_past_covariates = past_covariates_list[split_idx_2:]
+        test_series_indices = series_indices[split_idx_2:]
+
+        if eval_on_smoothed:
+            test_targets_raw = smoothed_targets_list[split_idx_2:]
+            print(f"[{run_tag}] Metrics will be calculated against SMOOTHED ground truth.")
+        else:
+            test_targets_raw = original_targets_list[split_idx_2:]
+            print(f"[{run_tag}] Metrics will be calculated against ORIGINAL RAW ground truth.")
+
+    print(f"[{run_tag}] Before global filtering - Train blocks: {len(train_targets)}, Val blocks: {len(val_targets)}, Test blocks: {len(test_targets)}")
+
+    # =========================================================================================
+    # GLOBAL LENGTH FILTERING TO GUARANTEE EXACT SAME DATASET ACROSS ALL CONFIGURATIONS/MODELS
+    # =========================================================================================
+    max_req_len = max(input_chunk_lengths) + max(output_chunk_lengths)
+
+    def _filter_by_length(targets, covs, past_covs, raw_targets=None, indices=None):
+        valid = [i for i, t in enumerate(targets) if len(t) >= max_req_len]
+        res_targets = [targets[i] for i in valid]
+        res_covs = [covs[i] for i in valid] if covs else []
+        res_past_covs = [past_covs[i] for i in valid] if past_covs else []
+        res_raw = [raw_targets[i] for i in valid] if raw_targets is not None else None
+        res_idx = [indices[i] for i in valid] if indices is not None else None
+        return res_targets, res_covs, res_past_covs, res_raw, res_idx
+
+    train_targets, train_covariates, train_past_covariates, _, _ = _filter_by_length(
+        train_targets, train_covariates, train_past_covariates
+    )
+    val_targets, val_covariates, val_past_covariates, _, _ = _filter_by_length(
+        val_targets, val_covariates, val_past_covariates
+    )
+    test_targets, test_covariates, test_past_covariates, test_targets_raw, test_series_indices = _filter_by_length(
+        test_targets, test_covariates, test_past_covariates, test_targets_raw, test_series_indices
+    )
+
+    if not train_targets:
+        print(f"[{run_tag}] FATAL: No training series left after length filtering (min req length {max_req_len}). Exiting run.")
+        return
+
+    print(f"[{run_tag}] After global filtering (min length {max_req_len}) - Train: {len(train_targets)}, Val: {len(val_targets)}, Test: {len(test_targets)}")
+    # =========================================================================================
+
+    if use_box_cox:
+        target_boxcox = Scaler(scaler=PowerTransformer(method='yeo-johnson'), global_fit=True)
+        covariates_boxcox = Scaler(scaler=PowerTransformer(method='yeo-johnson'), global_fit=True) if has_input_covariates else None
+        past_covariates_boxcox = Scaler(scaler=PowerTransformer(method='yeo-johnson'), global_fit=True) if has_past_covariates else None
+
+        train_targets = target_boxcox.fit_transform(train_targets)
+        train_covariates = covariates_boxcox.fit_transform(train_covariates) if has_input_covariates else [None] * len(train_targets)
+        train_past_covariates = past_covariates_boxcox.fit_transform(train_past_covariates) if has_past_covariates else [None] * len(train_targets)
+
+        val_targets = target_boxcox.transform(val_targets) if val_targets else []
+        val_covariates = covariates_boxcox.transform(val_covariates) if has_input_covariates and val_targets else [None] * len(val_targets)
+        val_past_covariates = past_covariates_boxcox.transform(val_past_covariates) if has_past_covariates and val_targets else [None] * len(val_targets)
+
+        test_targets = target_boxcox.transform(test_targets) if test_targets else []
+        test_covariates = covariates_boxcox.transform(test_covariates) if has_input_covariates and test_targets else [None] * len(test_targets)
+        test_past_covariates = past_covariates_boxcox.transform(test_past_covariates) if has_past_covariates and test_targets else [None] * len(test_targets)
+    else:
+        target_boxcox, covariates_boxcox, past_covariates_boxcox = None, None, None
+
 
     if not use_builtin_scalers:
         target_scaler = Scaler(global_fit=True)
@@ -312,13 +431,13 @@ def run_training(
         train_covariates_scaled = covariates_scaler.fit_transform(train_covariates) if has_input_covariates else [None] * len(train_targets)
         train_past_covariates_scaled = past_covariates_scaler.fit_transform(train_past_covariates) if has_past_covariates else [None] * len(train_targets)
 
-        val_targets_scaled = target_scaler.transform(val_targets)
-        val_covariates_scaled = covariates_scaler.transform(val_covariates) if has_input_covariates else [None] * len(val_targets)
-        val_past_covariates_scaled = past_covariates_scaler.transform(val_past_covariates) if has_past_covariates else [None] * len(val_targets)
+        val_targets_scaled = target_scaler.transform(val_targets) if val_targets else []
+        val_covariates_scaled = covariates_scaler.transform(val_covariates) if has_input_covariates and val_targets else [None] * len(val_targets)
+        val_past_covariates_scaled = past_covariates_scaler.transform(val_past_covariates) if has_past_covariates and val_targets else [None] * len(val_targets)
 
-        test_targets_scaled = target_scaler.transform(test_targets)
-        test_covariates_scaled = covariates_scaler.transform(test_covariates) if has_input_covariates else [None] * len(test_targets)
-        test_past_covariates_scaled = past_covariates_scaler.transform(test_past_covariates) if has_past_covariates else [None] * len(test_targets)
+        test_targets_scaled = target_scaler.transform(test_targets) if test_targets else []
+        test_covariates_scaled = covariates_scaler.transform(test_covariates) if has_input_covariates and test_targets else [None] * len(test_targets)
+        test_past_covariates_scaled = past_covariates_scaler.transform(test_past_covariates) if has_past_covariates and test_targets else [None] * len(test_targets)
     else:
         target_scaler, covariates_scaler, past_covariates_scaler = None, None, None
         train_targets_scaled = train_targets
@@ -341,8 +460,11 @@ def run_training(
         out_path.parent.mkdir(parents=True, exist_ok=True)
         bundle = {
             "target_scaler": target_scaler,
+            "target_boxcox": target_boxcox,
             "covariates_scaler": covariates_scaler,
+            "covariates_boxcox": covariates_boxcox,
             "past_covariates_scaler": past_covariates_scaler,
+            "past_covariates_boxcox": past_covariates_boxcox,
             "meta": {
                 "target_cols": list(target_cols),
                 "input_cols": list(input_cols),
@@ -373,6 +495,17 @@ def run_training(
             print(f"\n" + "="*50)
             print(f"[{run_tag}] Training for INPUT_CHUNK_LENGTH={input_chunk_length}, OUTPUT_CHUNK_LENGTH={output_chunk_length}")
             print("="*50 + "\n")
+
+            # Point to globally filtered lists
+            model_train_targets = train_targets_scaled
+            model_train_covs = train_covariates_scaled
+            model_train_past_covs = train_past_covariates_scaled
+
+            model_val_targets = val_targets_scaled if val_targets_scaled else None
+            model_val_covs = val_covariates_scaled if val_targets_scaled else None
+            model_val_past_covs = val_past_covariates_scaled if val_targets_scaled else None
+
+            model_test_targets = test_targets_scaled
 
             models = get_models(
                 input_chunk_length,
@@ -405,41 +538,40 @@ def run_training(
                 elif name == "LinearRegression" or name == "Chronos2":
                     persist_scalers(model_name_for_artifacts)
 
-                model_train_targets = train_targets_scaled
-                model_val_targets = val_targets_scaled
-                model_test_targets = test_targets_scaled
-
                 if name in NAIVE_MODELS:
                     pass
                 elif name in MODELS_WITH_FUTURE_COVARIATES:
-                    fit_kwargs = dict(
-                        series=model_train_targets,
-                        val_series=model_val_targets,
-                    )
+                    fit_kwargs = dict(series=model_train_targets)
+                    if model_val_targets is not None:
+                        fit_kwargs["val_series"] = model_val_targets
+
                     if has_input_covariates:
-                        fit_kwargs["future_covariates"] = train_covariates_scaled
-                        fit_kwargs["val_future_covariates"] = val_covariates_scaled
+                        fit_kwargs["future_covariates"] = model_train_covs
+                        if model_val_targets is not None:
+                            fit_kwargs["val_future_covariates"] = model_val_covs
                     if has_past_covariates:
-                        fit_kwargs["past_covariates"] = train_past_covariates_scaled
-                        fit_kwargs["val_past_covariates"] = val_past_covariates_scaled
+                        fit_kwargs["past_covariates"] = model_train_past_covs
+                        if model_val_targets is not None:
+                            fit_kwargs["val_past_covariates"] = model_val_past_covs
                     if name == "Chronos2":
                         fit_kwargs["epochs"] = 0
                     model.fit(**fit_kwargs)
                 elif name in MODELS_FUTURE_COVARIATES_ONLY:
-                    fit_kwargs = dict(
-                        series=model_train_targets,
-                        val_series=model_val_targets,
-                    )
+                    fit_kwargs = dict(series=model_train_targets)
+                    if model_val_targets is not None:
+                        fit_kwargs["val_series"] = model_val_targets
+
                     if has_input_covariates:
-                        fit_kwargs["future_covariates"] = train_covariates_scaled
-                        fit_kwargs["val_future_covariates"] = val_covariates_scaled
+                        fit_kwargs["future_covariates"] = model_train_covs
+                        if model_val_targets is not None:
+                            fit_kwargs["val_future_covariates"] = model_val_covs
                     model.fit(**fit_kwargs)
                 else:
                     try:
-                        model.fit(
-                            series=model_train_targets,
-                            val_series=model_val_targets
-                        )
+                        fit_kwargs = dict(series=model_train_targets)
+                        if model_val_targets is not None:
+                            fit_kwargs["val_series"] = model_val_targets
+                        model.fit(**fit_kwargs)
                     except Exception as e:
                         print(f"[{run_tag}] Error training {name}: {e}")
 
@@ -460,13 +592,9 @@ def run_training(
 
                 if name not in NAIVE_MODELS:
                     try:
-                        selected_indices = [
-                            idx for idx, t in enumerate(model_train_targets)
-                            if len(t) > input_chunk_length + output_chunk_length
-                        ]
                         train_series_for_pred = [
                             model_train_targets[idx][:-output_chunk_length]
-                            for idx in selected_indices
+                            for idx in range(len(model_train_targets))
                         ]
 
                         predict_kwargs = dict(
@@ -476,12 +604,12 @@ def run_training(
                         )
                         if name in MODELS_WITH_FUTURE_COVARIATES:
                             if has_input_covariates:
-                                predict_kwargs["future_covariates"] = [train_covariates_scaled[idx] for idx in selected_indices]
+                                predict_kwargs["future_covariates"] = [model_train_covs[idx] for idx in range(len(model_train_targets))]
                             if has_past_covariates:
-                                predict_kwargs["past_covariates"] = [train_past_covariates_scaled[idx] for idx in selected_indices]
+                                predict_kwargs["past_covariates"] = [model_train_past_covs[idx] for idx in range(len(model_train_targets))]
                         elif name in MODELS_FUTURE_COVARIATES_ONLY:
                             if has_input_covariates:
-                                predict_kwargs["future_covariates"] = [train_covariates_scaled[idx] for idx in selected_indices]
+                                predict_kwargs["future_covariates"] = [model_train_covs[idx] for idx in range(len(model_train_targets))]
 
                         train_preds_scaled = model.predict(**predict_kwargs)
 
@@ -493,11 +621,27 @@ def run_training(
                         else:
                             train_preds = train_preds_scaled if isinstance(train_preds_scaled, list) else [train_preds_scaled]
 
-                        true_train = [t[-output_chunk_length:] for t in train_targets if len(t) > input_chunk_length + output_chunk_length]
+                        if use_box_cox:
+                            if isinstance(train_preds, list):
+                                train_preds = target_boxcox.inverse_transform(train_preds)
+                            else:
+                                train_preds = target_boxcox.inverse_transform([train_preds])
+                        true_train = [model_train_targets[idx][-output_chunk_length:] for idx in range(len(model_train_targets))]
+                        if not use_builtin_scalers:
+                            true_train = target_scaler.inverse_transform(true_train)
+
+                        if use_box_cox:
+                            true_train = target_boxcox.inverse_transform(true_train)
+
                         train_mae = mae(true_train, train_preds)
                         train_rmse = rmse(true_train, train_preds)
-                        train_mape = mape(true_train, train_preds)
-                        print(f"[{run_tag}] Training metrics for {name} - MAE: {train_mae:.4f}, RMSE: {train_rmse:.4f}, MAPE: {train_mape:.4f}")
+
+                        if not disable_mape:
+                            train_mape = mape(true_train, train_preds)
+                            print(f"[{run_tag}] Training metrics for {name} - MAE: {train_mae:.4f}, RMSE: {train_rmse:.4f}, MAPE: {train_mape:.4f}")
+                        else:
+                            print(f"[{run_tag}] Training metrics for {name} - MAE: {train_mae:.4f}, RMSE: {train_rmse:.4f}")
+
                     except Exception as e:
                         print(f"[{run_tag}] Could not calculate train metrics for {name}: {e}")
 
@@ -512,16 +656,12 @@ def run_training(
                 for ts_target, ts_cov, ts_past_cov, ts_target_raw, ts_original_idx in zip(
                     model_test_targets, test_covariates_scaled, test_past_covariates_scaled, test_targets_raw, test_series_indices
                 ):
-                    max_input_chunk_length = max(input_chunk_lengths)
-                    if len(ts_target) <= max_input_chunk_length + output_chunk_length:
-                        continue
-
                     stride = 1
+                    max_input_chunk_length = max(input_chunk_lengths)
                     for forecast_start in range(max_input_chunk_length, len(ts_target) - output_chunk_length + 1, stride):
                         input_start = forecast_start - input_chunk_length
                         y_train = ts_target[input_start: forecast_start]
 
-                        # test_targets_raw contains either the raw original data OR the smoothed original data depending on the flag
                         y_true = ts_target_raw[forecast_start: forecast_start + output_chunk_length]
 
                         if name in MODELS_WITH_FUTURE_COVARIATES:
@@ -555,6 +695,9 @@ def run_training(
                         else:
                             pred = pred_scaled
 
+                        if use_box_cox:
+                            pred = target_boxcox.inverse_transform([pred])[0]
+
                         if use_detrend:
                             pred_retrended = reverse_detrend_timeseries([pred], ts_indices=[ts_original_idx])
                             pred = pred_retrended[0]
@@ -563,14 +706,26 @@ def run_training(
                             pred_relogged = reverse_log_transform_timeseries([pred], ts_indices=[ts_original_idx])
                             pred = pred_relogged[0]
 
+                        # --- APPLY CLIPPING BASED ON BOUNDS DICTIONARY ---
+                        if clip_predictions:
+                            pred_df = pred.to_dataframe()
+                            for col in pred_df.columns:
+                                if col in BOUNDS:
+                                    c_min = BOUNDS[col].get("min", None)
+                                    c_max = BOUNDS[col].get("max", None)
+                                    pred_df[col] = pred_df[col].clip(lower=c_min, upper=c_max)
+                            pred = pred.with_values(pred_df.values)
+
                         mae_list.append(mae(y_true, pred))
                         rmse_list.append(rmse(y_true, pred))
-                        mape_list.append(mape(y_true, pred))
+                        if not disable_mape:
+                            mape_list.append(mape(y_true, pred))
 
                         for col in target_cols:
                             mae_cols[col].append(mae(y_true[col], pred[col]))
                             rmse_cols[col].append(rmse(y_true[col], pred[col]))
-                            mape_cols[col].append(mape(y_true[col], pred[col]))
+                            if not disable_mape:
+                                mape_cols[col].append(mape(y_true[col], pred[col]))
 
                         pred_df = pred.to_dataframe()
                         pred_df['block_idx'] = ts_original_idx
@@ -586,7 +741,6 @@ def run_training(
                 if len(mae_list) > 0:
                     avg_mae = sum(mae_list) / len(mae_list)
                     avg_rmse = sum(rmse_list) / len(rmse_list)
-                    avg_mape = sum(mape_list) / len(mape_list)
 
                     res_dict = {
                         "RunTag": run_tag,
@@ -595,26 +749,36 @@ def run_training(
                         "Model": name,
                         "MAE": avg_mae,
                         "RMSE": avg_rmse,
-                        "MAPE": avg_mape,
                     }
 
-                    print(f"[{run_tag}] Results for {name}: MAE={avg_mae:.4f}, RMSE={avg_rmse:.4f}, MAPE={avg_mape:.4f}")
+                    if not disable_mape:
+                        avg_mape = sum(mape_list) / len(mape_list)
+                        res_dict["MAPE"] = avg_mape
+                        print(f"[{run_tag}] Results for {name}: MAE={avg_mae:.4f}, RMSE={avg_rmse:.4f}, MAPE={avg_mape:.4f}")
+                    else:
+                        print(f"[{run_tag}] Results for {name}: MAE={avg_mae:.4f}, RMSE={avg_rmse:.4f}")
 
                     for col in target_cols:
                         avg_mae_col = sum(mae_cols[col]) / len(mae_cols[col])
                         avg_rmse_col = sum(rmse_cols[col]) / len(rmse_cols[col])
-                        avg_mape_col = sum(mape_cols[col]) / len(mape_cols[col])
                         res_dict[f"MAE_{col}"] = avg_mae_col
                         res_dict[f"RMSE_{col}"] = avg_rmse_col
-                        res_dict[f"MAPE_{col}"] = avg_mape_col
-                        print(f"[{run_tag}]   {col} - MAE: {avg_mae_col:.4f}, RMSE: {avg_rmse_col:.4f}, MAPE: {avg_mape_col:.4f}")
+
+                        if not disable_mape:
+                            avg_mape_col = sum(mape_cols[col]) / len(mape_cols[col])
+                            res_dict[f"MAPE_{col}"] = avg_mape_col
+                            print(f"[{run_tag}]   {col} - MAE: {avg_mae_col:.4f}, RMSE: {avg_rmse_col:.4f}, MAPE: {avg_mape_col:.4f}")
+                        else:
+                            print(f"[{run_tag}]   {col} - MAE: {avg_mae_col:.4f}, RMSE: {avg_rmse_col:.4f}")
 
                     all_results.append(res_dict)
 
                     model_key = f"{name}_I{input_chunk_length}_O{output_chunk_length}"
-                    if model_key not in best_models_dict or avg_mape < best_models_dict[model_key]['mape']:
+                    score_to_track = avg_mape if not disable_mape else avg_mae
+
+                    if model_key not in best_models_dict or score_to_track < best_models_dict[model_key]['score']:
                         best_models_dict[model_key] = {
-                            'mape': avg_mape,
+                            'score': score_to_track,
                             'model': model,
                             'i': input_chunk_length,
                             'o': output_chunk_length,
@@ -647,6 +811,11 @@ if __name__ == "__main__":
         "--use-log-transform",
         action="store_true",
         help="Apply log transform before training and reverse it after prediction.",
+    )
+    parser.add_argument(
+        "--use-box-cox",
+        action="store_true",
+        help="Apply PowerTransformer (Yeo-Johnson) before training and reverse it after prediction.",
     )
     parser.add_argument(
         "--shuffle",
@@ -701,6 +870,21 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip external scalers and use models' built-in scalers (robust_statistics).",
     )
+    parser.add_argument(
+        "--split-per-session",
+        action="store_true",
+        help="Divide each session temporally into train (70%), val (15%), and test (15%) instead of splitting the entire list of sessions.",
+    )
+    parser.add_argument(
+        "--disable-mape",
+        action="store_true",
+        help="Disable the MAPE metric calculation (useful if encountering zero-division warnings/errors).",
+    )
+    parser.add_argument(
+        "--clip-predictions",
+        action="store_true",
+        help="Clip predictions on the test set based on the BOUNDS defined in config.py.",
+    )
     args = parser.parse_args()
 
     # Apply MA Window configurations if requested
@@ -748,10 +932,13 @@ if __name__ == "__main__":
 
     use_detrend = args.use_detrend
     use_log_transform = args.use_log_transform
+    use_box_cox = args.use_box_cox
     shuffle_data = args.shuffle
     use_builtin_scalers = args.use_builtin_scalers
+    disable_mape = args.disable_mape
+    clip_predictions = args.clip_predictions
 
-    print(f"use_detrend={use_detrend}, use_log_transform={use_log_transform}, ma_window={args.ma_window}, exp_smoothing_alpha={args.exp_smoothing_alpha}, eval_on_smoothed={args.eval_on_smoothed}, use_builtin_scalers={use_builtin_scalers}")
+    print(f"use_detrend={use_detrend}, use_log_transform={use_log_transform}, use_box_cox={use_box_cox}, ma_window={args.ma_window}, exp_smoothing_alpha={args.exp_smoothing_alpha}, eval_on_smoothed={args.eval_on_smoothed}, use_builtin_scalers={use_builtin_scalers}, split_per_session={args.split_per_session}, disable_mape={disable_mape}, clip_predictions={clip_predictions}")
 
     os.makedirs("outputs", exist_ok=True)
 
@@ -774,6 +961,7 @@ if __name__ == "__main__":
             artifact_group="all_targets",
             use_detrend=use_detrend,
             use_log_transform=use_log_transform,
+            use_box_cox=use_box_cox,
             shuffle_data=shuffle_data,
             exp_smoothing_alpha=args.exp_smoothing_alpha,
             eval_on_smoothed=args.eval_on_smoothed,
@@ -782,6 +970,9 @@ if __name__ == "__main__":
             model_groups=model_groups,
             max_files_to_load=max_files_to_load,
             use_builtin_scalers=use_builtin_scalers,
+            split_per_session=args.split_per_session,
+            disable_mape=disable_mape,
+            clip_predictions=clip_predictions,
         )
 
     if "per_target" in runs:
@@ -794,6 +985,7 @@ if __name__ == "__main__":
                 artifact_group="per_target",
                 use_detrend=use_detrend,
                 use_log_transform=use_log_transform,
+                use_box_cox=use_box_cox,
                 shuffle_data=shuffle_data,
                 exp_smoothing_alpha=args.exp_smoothing_alpha,
                 eval_on_smoothed=args.eval_on_smoothed,
@@ -802,6 +994,9 @@ if __name__ == "__main__":
                 model_groups=model_groups,
                 max_files_to_load=max_files_to_load,
                 use_builtin_scalers=use_builtin_scalers,
+                split_per_session=args.split_per_session,
+                disable_mape=disable_mape,
+                clip_predictions=clip_predictions,
             )
 
     if "simple" in runs:
@@ -816,6 +1011,7 @@ if __name__ == "__main__":
             artifact_group="simple",
             use_detrend=use_detrend,
             use_log_transform=use_log_transform,
+            use_box_cox=use_box_cox,
             shuffle_data=shuffle_data,
             exp_smoothing_alpha=args.exp_smoothing_alpha,
             eval_on_smoothed=args.eval_on_smoothed,
@@ -824,4 +1020,7 @@ if __name__ == "__main__":
             model_groups=model_groups,
             max_files_to_load=max_files_to_load,
             use_builtin_scalers=use_builtin_scalers,
+            split_per_session=args.split_per_session,
+            disable_mape=disable_mape,
+            clip_predictions=clip_predictions,
         )
