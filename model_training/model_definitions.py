@@ -238,6 +238,18 @@ def get_models(
     models = {
         "NaiveLastValue": LastValueRepeater(),
         "LinearRegression": LinearRegressionModel(**linear_regression_kwargs),
+        **(
+            {
+                # Chronos-2 foundation model (zero-shot by default with epochs=0 in fit)
+                "Chronos2": Chronos2Model(
+                    input_chunk_length=input_chunk_length,
+                    output_chunk_length=output_chunk_length,
+                    hub_model_name="autogluon/chronos-2-small",
+                )
+            }
+            if _HAS_CHRONOS2
+            else {}
+        ),
         "NeuralForecast_BiTCN": NeuralForecastModel(
             model_name=f"NeuralForecast_BiTCN_I{input_chunk_length}_O{output_chunk_length}",
             model="BiTCN",
