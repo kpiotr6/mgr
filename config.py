@@ -1,82 +1,82 @@
 
-# PER_TARGET_CONFIG = {
-#   "return": {
-#     "past": [
-#       "ashes_feedrate",
-#       "auger_5_load",
-#       "deduster_vacuum",
-#       "elevator_1_load",
-#       "first_chamber_filling",
-#       "gran1_cv",
-#       "output_devices_power",
-#       "output_vacuum",
-#       "second_chamber_filling",
-#       "separator_input_temp",
-#       "separator_load",
-#       "water"
-#     ],
-#     "input": [
-#       "circulation_fan_speed",
-#       "clinker_1_feedrate",
-#       "fresh_feed_setpoint",
-#       "separator_speed",
-#       "stone_slag_feedrate"
-#     ],
-#   },
-#   "first_chamber_filling": {
-#     "past": [
-#       "ashes_feedrate",
-#       "auger_5_load",
-#       "input_sum",
-#       "separator_load"
-#     ],
-#     "input": [
-#       "aspiration_fan_speed",
-#       "circulation_fan_speed",
-#       "clinker_1_feedrate",
-#       "fresh_air_flap_position",
-#       "separator_speed",
-#       "stone_slag_feedrate"
-#     ]
-#   },
-#   "second_chamber_filling": {
-#     "past": [
-#       "first_chamber_filling",
-#       "gran1_vol_gt_100_um",
-#       "mill_output_temp",
-#       "return",
-#       "separator_input_temp",
-#       "water"
-#     ],
-#     "input": [
-#       "circulation_fan_speed",
-#       "fresh_feed_setpoint",
-#       "stone_slag_feedrate"
-#     ]
-#   },
-#   "gran1_blain": {
-#     "past": [
-#       "deduster_vacuum",
-#       "gran1_cv",
-#       "gran1_davg_surf",
-#       "gran1_dv_50",
-#       "gran1_vol_gt_100_um",
-#       "gran1_vol_lt_5_um",
-#       "gran2_blain",
-#       "iron_sulfate",
-#       "mill_output_temp",
-#       "output_vacuum",
-#       "separator_power",
-#       "utility_devices_power"
-#     ],
-#     "input": [
-#       "aspiration_fan_speed",
-#       "circulation_fan_speed",
-#       "fresh_feed_setpoint",
-#       "separator_speed"
-#     ]
-#   }
-# }
+PER_TARGET_CONFIG = {
+  # "return": {
+  #   "past": [
+  #     "ashes_feedrate",
+  #     "auger_5_load",
+  #     "deduster_vacuum",
+  #     "elevator_1_load",
+  #     "first_chamber_filling",
+  #     "gran1_cv",
+  #     "output_devices_power",
+  #     "output_vacuum",
+  #     "second_chamber_filling",
+  #     "separator_input_temp",
+  #     "separator_load",
+  #     "water"
+  #   ],
+  #   "input": [
+  #     "circulation_fan_speed",
+  #     "clinker_1_feedrate",
+  #     "fresh_feed_setpoint",
+  #     "separator_speed",
+  #     "stone_slag_feedrate"
+  #   ],
+  # },
+  # "first_chamber_filling": {
+  #   "past": [
+  #     "ashes_feedrate",
+  #     "auger_5_load",
+  #     "input_sum",
+  #     "separator_load"
+  #   ],
+  #   "input": [
+  #     "aspiration_fan_speed",
+  #     "circulation_fan_speed",
+  #     "clinker_1_feedrate",
+  #     "fresh_air_flap_position",
+  #     "separator_speed",
+  #     "stone_slag_feedrate"
+  #   ]
+  # },
+  # "second_chamber_filling": {
+  #   "past": [
+  #     "first_chamber_filling",
+  #     "gran1_vol_gt_100_um",
+  #     "mill_output_temp",
+  #     "return",
+  #     "separator_input_temp",
+  #     "water"
+  #   ],
+  #   "input": [
+  #     "circulation_fan_speed",
+  #     "fresh_feed_setpoint",
+  #     "stone_slag_feedrate"
+  #   ]
+  # },
+  "gran1_blain": {
+    "past": [
+      "deduster_vacuum",
+      "gran1_cv",
+      "gran1_davg_surf",
+      "gran1_dv_50",
+      "gran1_vol_gt_100_um",
+      "gran1_vol_lt_5_um",
+      "gran2_blain",
+      "iron_sulfate",
+      "mill_output_temp",
+      "output_vacuum",
+      "separator_power",
+      "utility_devices_power"
+    ],
+    "input": [
+      "aspiration_fan_speed",
+      "circulation_fan_speed",
+      "fresh_feed_setpoint",
+      "separator_speed"
+    ]
+  }
+}
 
 
 BOUNDS = {
@@ -109,17 +109,13 @@ INPUT_COLS = [
 ]
 
 TARGET_COLS = [
-    # "return",
-    # "first_chamber_filling",
-    # "second_chamber_filling",
+    "return",
+    "first_chamber_filling",
+    "second_chamber_filling",
     "gran1_blain",
 ]
 
 PAST_COLS = [
-        "return",
-    "first_chamber_filling",
-    "second_chamber_filling",
-# "gran1_blain",
     "input_sum",
     'ashes_feedrate',
     'auger_5_load',
@@ -253,83 +249,4 @@ SIMPLE_MODEL_CONFIG = {
     ]
 }
 
-PER_TARGET_CONFIG = {
-  "return": {
-    "past": [
-      "ashes_feedrate",
-      "filter_power",
-      "first_chamber_filling",
-      "gran1_dv_10",
-      "gran1_obscuration",
-      "gran1_vol_gt_100_um",
-      "input_sum",
-      "mill_output_temp",
-      "second_chamber_filling",
-      "separator_input_temp",
-      "separator_load",
-      "separator_power",
-      "water"
-    ],
-    "input": [
-      "circulation_fan_speed",
-      "clinker_1_feedrate",
-      "fresh_feed_setpoint",
-      "separator_speed",
-      "stone_slag_feedrate"
-    ]
-  },
-  "first_chamber_filling": {
-    "past": [
-      "deduster_vacuum",
-      "glycol",
-      "gran2_cv",
-      "gran2_davg_surf",
-      "gran2_dv_90",
-      "input_sum",
-      "output_vacuum",
-      "return",
-      "separator_load"
-    ],
-    "input": [
-      "circulation_fan_speed",
-      "clinker_1_feedrate",
-      "stone_slag_feedrate"
-    ]
-  },
-  "second_chamber_filling": {
-    "past": [
-      "gran1_vol_gt_100_um",
-      "gran1_vol_gt_50_um",
-      "iron_sulfate",
-      "mill_output_temp",
-      "return",
-      "separator_load",
-      "water"
-    ],
-    "input": [
-      "circulation_fan_speed",
-      "stone_slag_feedrate"
-    ]
-  },
-  # "gran1_blain": {
-  #   "past": [
-  #     "deduster_vacuum",
-  #     "gran1_cv",
-  #     "gran1_dv_50",
-  #     "gran1_obscuration",
-  #     "gran1_vol_gt_100_um",
-  #     "gran1_vol_lt_5_um",
-  #     "gran2_davg_vol",
-  #     "gran2_vol_gt_100_um",
-  #     "input_sum",
-  #     "second_chamber_filling",
-  #     "separator_output_temp"
-  #   ],
-  #   "input": [
-  #     "aspiration_fan_speed",
-  #     "clinker_2_feedrate",
-  #     "gypsum_feedrate",
-  #     "stone_slag_feedrate"
-  #   ]
-  # }
-}
+
