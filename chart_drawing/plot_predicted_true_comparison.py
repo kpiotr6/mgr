@@ -9,10 +9,10 @@ from collections import defaultdict
 INPUT_DIR = 'outputs_ready'
 BASE_OUTPUT_DIR = 'chart_drawing/predicted_true_comparison'
 MAX_WINDOWS = 10  # Maximum number of forecast windows per plot
-SECONDS_PER_STEP = 10  # Each sequence step represents 10 seconds
+SECONDS_PER_STEP = 5  # Each sequence step represents 10 seconds
 
 # 2. Variables to plot
-TARGET_VARS = ['return', 'first_chamber_filling', 'second_chamber_filling']
+TARGET_VARS = ['return', 'first_chamber_filling', 'second_chamber_filling', 'gran1_blain']
 
 def clean_sequence_index(df):
     """
@@ -66,7 +66,7 @@ def main():
     for (input_len, output_len, model_name), targets_dict in configs.items():
         print(f"\n{'='*50}\nProcessing Model: {model_name} | Input={input_len}, Output={output_len}\n{'='*50}")
 
-        window_minutes = (output_len * SECONDS_PER_STEP) / 60.0
+        window_minutes = (output_len * SECONDS_PER_STEP)
 
         dfs_pred = {}
         dfs_true = {}
@@ -169,9 +169,9 @@ def main():
                         window_start_seq = origin_to_start_seq[origin_point]
                         ax.axvline(x=window_start_seq, color='black', linestyle='-', linewidth=1.2, alpha=0.7, label=label)
 
-                    window_minutes_input = (input_len * SECONDS_PER_STEP) / 60.0
+                    window_minutes_input = (input_len * SECONDS_PER_STEP)
 
-                    title_str = f'{var.replace("_", " ").title()} - {model_name} (Block {block_id}, Part {part_idx + 1}) | Lookback Window: ({input_len} steps / {window_minutes_input:.1f} mins)'
+                    title_str = f'{var.replace("_", " ").title()} - {model_name} | Lookback Window: ({input_len} steps / {window_minutes_input:.1f} mins)'
                     ax.set_title(title_str, fontsize=14, fontweight='bold')
                     ax.set_ylabel(var)
                     ax.grid(True, linestyle='--', alpha=0.5)
