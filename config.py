@@ -113,19 +113,17 @@ TARGET_COLS = [
 ]
 
 PAST_COLS = [
-  "deduster_vacuum",
-  "elevator_1_load",
-  "gran1_cv",
-  "output_devices_power",
-  "output_vacuum",
-  "ashes_feedrate",
-  "auger_5_load",
-  "input_sum",
-  "separator_load",
-  "gran1_vol_gt_100_um",
-  "mill_output_temp",
-  "separator_input_temp",
-  "water"
+      "deduster_vacuum",
+      "elevator_1_load",
+      "gran1_cv",
+      "output_devices_power",
+      "output_vacuum",
+      "separator_input_temp",
+      "water",
+      "ashes_feedrate",
+      "auger_5_load",
+      "input_sum",
+      "separator_load"
 ]
 
 TIME_COL = "sequence_index"
