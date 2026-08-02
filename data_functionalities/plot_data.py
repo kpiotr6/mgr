@@ -6,8 +6,7 @@ import argparse
 
 features_to_plot = [
     "return",
-    "first_chamber_filling",
-    "second_chamber_filling",
+    "separator_speed",
     # "gran1_blain",
 ]
 
