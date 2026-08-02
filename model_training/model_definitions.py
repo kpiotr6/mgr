@@ -236,131 +236,131 @@ def get_models(
         return base_kwargs
 
     models = {
-        "NaiveLastValue": LastValueRepeater(),
+        # "NaiveLastValue": LastValueRepeater(),
         "LinearRegression": LinearRegressionModel(**linear_regression_kwargs),
-        **(
-            {
-                # Chronos-2 foundation model (zero-shot by default with epochs=0 in fit)
-                "Chronos2": Chronos2Model(
-                    input_chunk_length=input_chunk_length,
-                    output_chunk_length=output_chunk_length,
-                    hub_model_name="autogluon/chronos-2-small",
-                )
-            }
-            if _HAS_CHRONOS2
-            else {}
-        ),
-        "NeuralForecast_BiTCN": NeuralForecastModel(
-            model_name=f"NeuralForecast_BiTCN_I{input_chunk_length}_O{output_chunk_length}",
-            model="BiTCN",
-            save_checkpoints=True,
-            force_reset=True,
-            input_chunk_length=input_chunk_length,
-            output_chunk_length=output_chunk_length,
-            loss_fn=RMSE(),
-            n_epochs=30,
-            batch_size=1024,
-            optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
-            model_kwargs=_configure_model_kwargs({
-                # Size modifications for BiTCN
-                "hidden_size": 256,       # Number of hidden units in the representations
+        # **(
+        #     {
+        #         # Chronos-2 foundation model (zero-shot by default with epochs=0 in fit)
+        #         "Chronos2": Chronos2Model(
+        #             input_chunk_length=input_chunk_length,
+        #             output_chunk_length=output_chunk_length,
+        #             hub_model_name="autogluon/chronos-2-small",
+        #         )
+        #     }
+        #     if _HAS_CHRONOS2
+        #     else {}
+        # ),
+        # "NeuralForecast_BiTCN": NeuralForecastModel(
+        #     model_name=f"{run_group}_NeuralForecast_BiTCN_I{input_chunk_length}_O{output_chunk_length}",
+        #     model="BiTCN",
+        #     save_checkpoints=True,
+        #     force_reset=True,
+        #     input_chunk_length=input_chunk_length,
+        #     output_chunk_length=output_chunk_length,
+        #     loss_fn=RMSE(),
+        #     n_epochs=30,
+        #     batch_size=1024,
+        #     optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
+        #     model_kwargs=_configure_model_kwargs({
+        #         # Size modifications for BiTCN
+        #         "hidden_size": 256,       # Number of hidden units in the representations
 
-                "lr_scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau,
-                "lr_scheduler_kwargs": {"mode": "min", "factor": 0.5, "patience": 2},
-            }),
-            pl_trainer_kwargs=_build_nf_trainer_kwargs(artifact_root, "NF_BITCN"),
-        ),
-        "NeuralForecast_TSMixer": NeuralForecastModel(
-            model_name=f"NeuralForecast_TSMixer_I{input_chunk_length}_O{output_chunk_length}",
-            model="TSMixerx",
-            save_checkpoints=True,
-            force_reset=True,
-            input_chunk_length=input_chunk_length,
-            output_chunk_length=output_chunk_length,
-            model_kwargs=_configure_model_kwargs({
-                # Size modifications for TSMixer
-                "n_block": 6,             # Increased number of mixing blocks (default is usually 4)
-                "ff_dim": 128,            # Dimension of the feed-forward network
-                "dropout": 0.1,
+        #         "lr_scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau,
+        #         "lr_scheduler_kwargs": {"mode": "min", "factor": 0.5, "patience": 2},
+        #     }),
+        #     pl_trainer_kwargs=_build_nf_trainer_kwargs(artifact_root, "NF_BITCN"),
+        # ),
+        # "NeuralForecast_TSMixer": NeuralForecastModel(
+        #     model_name=f"{run_group}_NeuralForecast_TSMixer_I{input_chunk_length}_O{output_chunk_length}",
+        #     model="TSMixerx",
+        #     save_checkpoints=True,
+        #     force_reset=True,
+        #     input_chunk_length=input_chunk_length,
+        #     output_chunk_length=output_chunk_length,
+        #     model_kwargs=_configure_model_kwargs({
+        #         # Size modifications for TSMixer
+        #         "n_block": 6,             # Increased number of mixing blocks (default is usually 4)
+        #         "ff_dim": 128,            # Dimension of the feed-forward network
+        #         "dropout": 0.1,
 
-                "lr_scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau,
-                "lr_scheduler_kwargs": {"mode": "min", "factor": 0.5, "patience": 10},
-            }),
-            loss_fn=RMSE(),
-            n_epochs=30,
-            batch_size=1024,
-            optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
-            pl_trainer_kwargs=_build_nf_trainer_kwargs(artifact_root, "NF_TSMIXER"),
-        ),
-        "NeuralForecast_Nhits": NeuralForecastModel(
-            model_name=f"NeuralForecast_Nhits_I{input_chunk_length}_O{output_chunk_length}",
-            model="NHITS",
-            save_checkpoints=True,
-            force_reset=True,
-            input_chunk_length=input_chunk_length,
-            output_chunk_length=output_chunk_length,
-            loss_fn=RMSE(),
-            n_epochs=30,
-            batch_size=1024,
-            optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
-            model_kwargs=_configure_model_kwargs({
-                # Size modifications for NHITS
-                "mlp_units": [[1024, 1024, 1024], [1024, 1024, 1024], [1024, 1024, 1024]], # Neurons per layer in each block
-                "n_blocks": [3, 3, 3],             # Number of blocks per stack (increased from [2, 2, 2])
-                "n_pool_kernel_size": [8, 4, 1],   # Kernel size of the max pooling downsampling operations
-                "n_freq_downsample": [8, 4, 1],    # Frequency of downsampling parameters
-                "activation": "LeakyReLU",
+        #         "lr_scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau,
+        #         "lr_scheduler_kwargs": {"mode": "min", "factor": 0.5, "patience": 10},
+        #     }),
+        #     loss_fn=RMSE(),
+        #     n_epochs=30,
+        #     batch_size=1024,
+        #     optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
+        #     pl_trainer_kwargs=_build_nf_trainer_kwargs(artifact_root, "NF_TSMIXER"),
+        # ),
+        # "NeuralForecast_Nhits": NeuralForecastModel(
+        #     model_name=f"{run_group}_NeuralForecast_Nhits_I{input_chunk_length}_O{output_chunk_length}",
+        #     model="NHITS",
+        #     save_checkpoints=True,
+        #     force_reset=True,
+        #     input_chunk_length=input_chunk_length,
+        #     output_chunk_length=output_chunk_length,
+        #     loss_fn=RMSE(),
+        #     n_epochs=30,
+        #     batch_size=1024,
+        #     optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
+        #     model_kwargs=_configure_model_kwargs({
+        #         # Size modifications for NHITS
+        #         "mlp_units": [[1024, 1024, 1024], [1024, 1024, 1024], [1024, 1024, 1024]], # Neurons per layer in each block
+        #         "n_blocks": [3, 3, 3],             # Number of blocks per stack (increased from [2, 2, 2])
+        #         "n_pool_kernel_size": [8, 4, 1],   # Kernel size of the max pooling downsampling operations
+        #         "n_freq_downsample": [8, 4, 1],    # Frequency of downsampling parameters
+        #         "activation": "LeakyReLU",
 
-                "lr_scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau,
-                "lr_scheduler_kwargs": {"mode": "min", "factor": 0.5, "patience": 2},
-            }),
-            pl_trainer_kwargs=_build_nf_trainer_kwargs(artifact_root, "NF_NHITS"),
-        ),
-        "NeuralForecast_XLinear": NeuralForecastModel(
-            model_name=f"NeuralForecast_XLinear_I{input_chunk_length}_O{output_chunk_length}",
-            model="XLinear",
-            save_checkpoints=True,
-            force_reset=True,
-            input_chunk_length=input_chunk_length,
-            output_chunk_length=output_chunk_length,
-            loss_fn=RMSE(),
-            n_epochs=30,
-            batch_size=1024,
-            optimizer_kwargs={"lr": 1e-2, "weight_decay": 1e-4},
-            model_kwargs=_configure_model_kwargs({
-                # Size modifications for XLinear
-                "hidden_size": 512,      # Hidden size of the linear models (increased from 512)
-                "temporal_ff": 512,      # Temporal feed-forward layer dimensions (increased from 512)
-                "channel_ff": 256,        # Channel feed-forward layer dimensions (increased from 256)
+        #         "lr_scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau,
+        #         "lr_scheduler_kwargs": {"mode": "min", "factor": 0.5, "patience": 2},
+        #     }),
+        #     pl_trainer_kwargs=_build_nf_trainer_kwargs(artifact_root, "NF_NHITS"),
+        # ),
+        # "NeuralForecast_XLinear": NeuralForecastModel(
+        #     model_name=f"{run_group}_NeuralForecast_XLinear_I{input_chunk_length}_O{output_chunk_length}",
+        #     model="XLinear",
+        #     save_checkpoints=True,
+        #     force_reset=True,
+        #     input_chunk_length=input_chunk_length,
+        #     output_chunk_length=output_chunk_length,
+        #     loss_fn=RMSE(),
+        #     n_epochs=30,
+        #     batch_size=1024,
+        #     optimizer_kwargs={"lr": 1e-2, "weight_decay": 1e-4},
+        #     model_kwargs=_configure_model_kwargs({
+        #         # Size modifications for XLinear
+        #         "hidden_size": 512,      # Hidden size of the linear models (increased from 512)
+        #         "temporal_ff": 512,      # Temporal feed-forward layer dimensions (increased from 512)
+        #         "channel_ff": 256,        # Channel feed-forward layer dimensions (increased from 256)
 
-                "lr_scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau,
-                "lr_scheduler_kwargs": {"mode": "min", "factor": 0.5, "patience": 2},
-            }),
-            pl_trainer_kwargs=_build_nf_trainer_kwargs(artifact_root, "NF_XLINEAR"),
-        ),
-        "NeuralForecast_TFT": NeuralForecastModel(
-            model_name=f"NeuralForecast_TFT_I{input_chunk_length}_O{output_chunk_length}",
-            model="TFT",
-            save_checkpoints=True,
-            force_reset=True,
-            input_chunk_length=input_chunk_length,
-            output_chunk_length=output_chunk_length,
-            loss_fn=RMSE(),
-            n_epochs=30,
-            batch_size=512,
-            optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
-            model_kwargs=_configure_model_kwargs({
-                # Size modifications for Temporal Fusion Transformer
-                "hidden_size": 512,               # Dimensionality of the hidden state in LSTM / self-attention layers
-                "n_head": 16,                      # Number of attention heads for the Temporal Fusion Decoder
-                # "dropout": 0.1,                   # Dropout probability
-                # "attn_dropout": 0.1,              # Dropout probability for the attention mechanisms
+        #         "lr_scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau,
+        #         "lr_scheduler_kwargs": {"mode": "min", "factor": 0.5, "patience": 2},
+        #     }),
+        #     pl_trainer_kwargs=_build_nf_trainer_kwargs(artifact_root, "NF_XLINEAR"),
+        # ),
+        # "NeuralForecast_TFT": NeuralForecastModel(
+        #     model_name=f"{run_group}_NeuralForecast_TFT_I{input_chunk_length}_O{output_chunk_length}",
+        #     model="TFT",
+        #     save_checkpoints=True,
+        #     force_reset=True,
+        #     input_chunk_length=input_chunk_length,
+        #     output_chunk_length=output_chunk_length,
+        #     loss_fn=RMSE(),
+        #     n_epochs=30,
+        #     batch_size=512,
+        #     optimizer_kwargs={"lr": 1e-3, "weight_decay": 1e-4},
+        #     model_kwargs=_configure_model_kwargs({
+        #         # Size modifications for Temporal Fusion Transformer
+        #         "hidden_size": 512,               # Dimensionality of the hidden state in LSTM / self-attention layers
+        #         "n_head": 16,                      # Number of attention heads for the Temporal Fusion Decoder
+        #         # "dropout": 0.1,                   # Dropout probability
+        #         # "attn_dropout": 0.1,              # Dropout probability for the attention mechanisms
 
-                "lr_scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau,
-                "lr_scheduler_kwargs": {"mode": "min", "factor": 0.5, "patience": 2},
-            }),
-            pl_trainer_kwargs=_build_nf_trainer_kwargs(artifact_root, "NF_TFT"),
-        ),
+        #         "lr_scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau,
+        #         "lr_scheduler_kwargs": {"mode": "min", "factor": 0.5, "patience": 2},
+        #     }),
+        #     pl_trainer_kwargs=_build_nf_trainer_kwargs(artifact_root, "NF_TFT"),
+        # ),
     }
 
     return models

@@ -1,0 +1,38 @@
+input_chunk_length: 2
+likelihood: null
+lr_scheduler_cls: null
+lr_scheduler_kwargs: null
+n_future_covs: 7
+n_past_covs: 11
+n_stat_covs: 0
+nf_model_class: !!python/name:neuralforecast.models.tft.TFT ''
+nf_model_params:
+  h: 2
+  hidden_size: 512
+  input_size: 2
+  n_head: 16
+  random_seed: null
+optimizer_cls: !!python/name:torch.optim.adam.Adam ''
+optimizer_kwargs:
+  lr: 0.001
+  weight_decay: 0.0001
+output_chunk_length: 2
+output_chunk_shift: 0
+train_sample_shape:
+- !!python/tuple
+  - 2
+  - 3
+- !!python/tuple
+  - 2
+  - 11
+- !!python/tuple
+  - 2
+  - 7
+- !!python/tuple
+  - 2
+  - 7
+- null
+- !!python/tuple
+  - 2
+  - 3
+use_reversible_instance_norm: false

@@ -93,6 +93,25 @@ FRAME_INTERVAL_MS = 150  # wall-clock ms between frames
 WINDOW_MINUTES = 120.0   # rolling chart window: 2 hours of process time
 HISTORY_LEN = int(WINDOW_MINUTES / DT_PER_FRAME)  # number of points kept on the strip charts
 
+# --- noise settings ---
+# Two distinct kinds of randomness, mixed in so the signals don't look like a
+# noiseless textbook simulation:
+#   1. PROCESS noise: the *actual* fresh feed rate wobbles around the slider
+#      setpoint (real feeders/material hardness are never perfectly steady).
+#      This noise is fed into the real dynamics via sim.step(), so it
+#      genuinely propagates through hold-up, return flow, and fineness.
+#   2. MEASUREMENT noise: small sensor-like jitter added only to the
+#      *displayed* readings, on top of the true simulated values - it never
+#      feeds back into the simulation state. Clipped to the same guaranteed
+#      output ranges as before, so bounds are never violated.
+NOISE_SEED = None                # set an int for reproducible noise, else random each run
+_rng = np.random.default_rng(NOISE_SEED)
+
+FEED_NOISE_STD_FRAC = 0.035      # process noise: ~3.5% relative std on fresh feed rate
+MEAS_NOISE_H_STD = 1.2           # measurement noise std, tonnes (H1, H2)
+MEAS_NOISE_MR_STD = 6.0          # measurement noise std, t/h (return flow)
+MEAS_NOISE_BLAINE_STD = 80.0     # measurement noise std, cm^2/g (fineness)
+
 print("Warming up the simulator to an initial steady state (a few seconds)...")
 _warmup = sim.simulate((0, 2000), lambda t: MC_DEFAULT_TH / 60.0,
                         t_eval=np.linspace(1900, 2000, 3))
@@ -181,22 +200,35 @@ slider_sep = Slider(ax_sep, "Separator Speed (rpm)", 0.0, 750.0,
 def update(_frame):
     global state, t_now
 
-    Mc_th = slider_feed.val
+    Mc_setpoint = slider_feed.val
     sim.set_rotor_speed(slider_sep.val)    # live separator rotor-speed control
                                             # (higher rpm -> finer cut point, more recirculation)
-    Mc0 = Mc_th / 60.0                     # t/min
+
+    # process noise: the true feed rate wobbles around the slider setpoint
+    Mc_actual = Mc_setpoint * (1.0 + _rng.normal(0.0, FEED_NOISE_STD_FRAC))
+    Mc_actual = max(Mc_actual, 1.0)
+    Mc0 = Mc_actual / 60.0                 # t/min
 
     # advance the simulation by one frame's worth of process time under the
-    # current (slider-set) piecewise-constant controls
+    # current (slider-set, noise-perturbed) piecewise-constant controls
     state = sim.step(state, dt=DT_PER_FRAME, Mc=Mc0)
     t_now += DT_PER_FRAME
 
     out = sim.instantaneous_outputs(state)
+
+    # measurement noise: sensor-like jitter on the displayed readings only,
+    # clipped back into the same guaranteed ranges used elsewhere
+    H1_meas = np.clip(out["H1"] + _rng.normal(0.0, MEAS_NOISE_H_STD), 0.0, sim.H_cap * 1.1)
+    H2_meas = np.clip(out["H2"] + _rng.normal(0.0, MEAS_NOISE_H_STD), 0.0, sim.H_cap * 1.1)
+    Mr_meas = np.clip(out["Mr"] + _rng.normal(0.0, MEAS_NOISE_MR_STD), 0.0, sim.MR_MAX)
+    blaine_meas = np.clip(out["blaine"] + _rng.normal(0.0, MEAS_NOISE_BLAINE_STD),
+                           sim.BLAINE_MIN, sim.BLAINE_MAX)
+
     t_hist.append(t_now)
-    H1_hist.append(out["H1"])
-    H2_hist.append(out["H2"])
-    Mr_hist.append(out["Mr"])
-    blaine_hist.append(out["blaine"])
+    H1_hist.append(H1_meas)
+    H2_hist.append(H2_meas)
+    Mr_hist.append(Mr_meas)
+    blaine_hist.append(blaine_meas)
 
     for line, hist in zip(all_lines, all_hists):
         line.set_data(t_hist, hist)

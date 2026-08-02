@@ -1,0 +1,39 @@
+input_chunk_length: 4
+likelihood: null
+lr_scheduler_cls: null
+lr_scheduler_kwargs: null
+n_future_covs: 7
+n_past_covs: 11
+n_stat_covs: 0
+nf_model_class: !!python/name:neuralforecast.models.xlinear.XLinear ''
+nf_model_params:
+  channel_ff: 256
+  h: 3
+  hidden_size: 512
+  input_size: 4
+  random_seed: null
+  temporal_ff: 512
+optimizer_cls: !!python/name:torch.optim.adam.Adam ''
+optimizer_kwargs:
+  lr: 0.01
+  weight_decay: 0.0001
+output_chunk_length: 3
+output_chunk_shift: 0
+train_sample_shape:
+- !!python/tuple
+  - 4
+  - 3
+- !!python/tuple
+  - 4
+  - 11
+- !!python/tuple
+  - 4
+  - 7
+- !!python/tuple
+  - 3
+  - 7
+- null
+- !!python/tuple
+  - 3
+  - 3
+use_reversible_instance_norm: false

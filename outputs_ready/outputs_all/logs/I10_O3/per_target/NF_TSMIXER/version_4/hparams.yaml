@@ -1,0 +1,39 @@
+input_chunk_length: 10
+likelihood: null
+lr_scheduler_cls: null
+lr_scheduler_kwargs: null
+n_future_covs: 3
+n_past_covs: 6
+n_stat_covs: 0
+nf_model_class: !!python/name:neuralforecast.models.tsmixerx.TSMixerx ''
+nf_model_params:
+  dropout: 0.1
+  ff_dim: 128
+  h: 3
+  input_size: 10
+  n_block: 6
+  random_seed: null
+optimizer_cls: !!python/name:torch.optim.adam.Adam ''
+optimizer_kwargs:
+  lr: 0.001
+  weight_decay: 0.0001
+output_chunk_length: 3
+output_chunk_shift: 0
+train_sample_shape:
+- !!python/tuple
+  - 10
+  - 1
+- !!python/tuple
+  - 10
+  - 6
+- !!python/tuple
+  - 10
+  - 3
+- !!python/tuple
+  - 3
+  - 3
+- null
+- !!python/tuple
+  - 3
+  - 1
+use_reversible_instance_norm: false

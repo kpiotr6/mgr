@@ -52,8 +52,8 @@ from model_training.model_definitions import (
 )
 
 
-input_chunk_lengths = [2, 4, 6, 8, 10]
-output_chunk_lengths = [1, 2, 3]
+input_chunk_lengths = [10]
+output_chunk_lengths = [1,2,3]
 
 min_series_length = max(input_chunk_lengths) + max(output_chunk_lengths)
 print(min_series_length)
@@ -531,7 +531,7 @@ def run_training(
             for name, model in models.items():
                 print(f"\n[{run_tag}] Training {name}...")
 
-                model_name_for_artifacts = f"{name}_I{input_chunk_length}_O{output_chunk_length}"
+                model_name_for_artifacts = f"{artifact_group}_{name}_I{input_chunk_length}_O{output_chunk_length}"
 
                 if name in CHECKPOINT_MODELS:
                     persist_scalers(model_name_for_artifacts)
@@ -913,22 +913,15 @@ if __name__ == "__main__":
             else:
                 cfg["past"] = [f"{target_key}_ma_{w}"]
 
-        # Update simple model config in place
-        simple_target_cols = SIMPLE_MODEL_CONFIG.get("target_cols", TARGET_COLS)
-        simple_target_mas = [f"{c}_ma_{w}" for c in simple_target_cols]
+        # Update simple model config in place (same per-target structure as PER_TARGET_CONFIG)
+        for target_key, cfg in SIMPLE_MODEL_CONFIG.items():
+            if "input" in cfg:
+                cfg["input"] = list(cfg["input"]) + [f"{c}_ma_{w}" for c in cfg["input"]]
 
-        if "input_cols" in SIMPLE_MODEL_CONFIG:
-            SIMPLE_MODEL_CONFIG["input_cols"] = list(SIMPLE_MODEL_CONFIG["input_cols"]) + [f"{c}_ma_{w}" for c in SIMPLE_MODEL_CONFIG["input_cols"]]
-        elif "input" in SIMPLE_MODEL_CONFIG:
-            SIMPLE_MODEL_CONFIG["input"] = list(SIMPLE_MODEL_CONFIG["input"]) + [f"{c}_ma_{w}" for c in SIMPLE_MODEL_CONFIG["input"]]
-
-        if "past_cols" in SIMPLE_MODEL_CONFIG:
-            SIMPLE_MODEL_CONFIG["past_cols"] = list(SIMPLE_MODEL_CONFIG["past_cols"]) + [f"{c}_ma_{w}" for c in SIMPLE_MODEL_CONFIG["past_cols"]] + simple_target_mas
-        elif "past" in SIMPLE_MODEL_CONFIG:
-            SIMPLE_MODEL_CONFIG["past"] = list(SIMPLE_MODEL_CONFIG["past"]) + [f"{c}_ma_{w}" for c in SIMPLE_MODEL_CONFIG["past"]] + simple_target_mas
-        else:
-            # If neither exist, initialize past_cols with target moving averages
-            SIMPLE_MODEL_CONFIG["past_cols"] = simple_target_mas
+            if "past" in cfg:
+                cfg["past"] = list(cfg["past"]) + [f"{c}_ma_{w}" for c in cfg["past"]] + [f"{target_key}_ma_{w}"]
+            else:
+                cfg["past"] = [f"{target_key}_ma_{w}"]
 
     use_detrend = args.use_detrend
     use_log_transform = args.use_log_transform
@@ -982,7 +975,7 @@ if __name__ == "__main__":
                 input_cols=cfg.get("input", []),
                 past_cols=cfg.get("past", []),
                 run_tag=f"target_{target}",
-                artifact_group="per_target",
+                artifact_group=f"per_target_{target}",
                 use_detrend=use_detrend,
                 use_log_transform=use_log_transform,
                 use_box_cox=use_box_cox,
@@ -1000,27 +993,25 @@ if __name__ == "__main__":
             )
 
     if "simple" in runs:
-        simple_target_cols = SIMPLE_MODEL_CONFIG.get("target_cols", TARGET_COLS)
-        simple_input_cols = SIMPLE_MODEL_CONFIG.get("input_cols", SIMPLE_MODEL_CONFIG.get("input", []))
-        simple_past_cols = SIMPLE_MODEL_CONFIG.get("past_cols", SIMPLE_MODEL_CONFIG.get("past", []))
-        run_training(
-            target_cols=simple_target_cols,
-            input_cols=simple_input_cols,
-            past_cols=simple_past_cols,
-            run_tag="simple_model",
-            artifact_group="simple",
-            use_detrend=use_detrend,
-            use_log_transform=use_log_transform,
-            use_box_cox=use_box_cox,
-            shuffle_data=shuffle_data,
-            exp_smoothing_alpha=args.exp_smoothing_alpha,
-            eval_on_smoothed=args.eval_on_smoothed,
-            model_names=model_names,
-            exclude_model_names=exclude_model_names,
-            model_groups=model_groups,
-            max_files_to_load=max_files_to_load,
-            use_builtin_scalers=use_builtin_scalers,
-            split_per_session=args.split_per_session,
-            disable_mape=disable_mape,
-            clip_predictions=clip_predictions,
-        )
+        for target, cfg in SIMPLE_MODEL_CONFIG.items():
+            run_training(
+                target_cols=[target],
+                input_cols=cfg.get("input", []),
+                past_cols=cfg.get("past", []),
+                run_tag=f"simple_{target}",
+                artifact_group=f"simple_{target}",
+                use_detrend=use_detrend,
+                use_log_transform=use_log_transform,
+                use_box_cox=use_box_cox,
+                shuffle_data=shuffle_data,
+                exp_smoothing_alpha=args.exp_smoothing_alpha,
+                eval_on_smoothed=args.eval_on_smoothed,
+                model_names=model_names,
+                exclude_model_names=exclude_model_names,
+                model_groups=model_groups,
+                max_files_to_load=max_files_to_load,
+                use_builtin_scalers=use_builtin_scalers,
+                split_per_session=args.split_per_session,
+                disable_mape=disable_mape,
+                clip_predictions=clip_predictions,
+            )
