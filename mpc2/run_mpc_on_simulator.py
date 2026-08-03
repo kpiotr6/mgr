@@ -95,6 +95,17 @@ TARGET_WEIGHTS = {
 # broken by proximity to the currently-applied control - see module docstring.
 TIE_BREAK_TOLERANCE = 0.01
 
+# Per-control-variable weight punishing candidates for deviating from the
+# currently-applied control (normalized by that control's bounds range and
+# added directly to the cost - see MPCController._move_penalty). Unlike
+# TIE_BREAK_TOLERANCE, this actually competes with the target error terms:
+# raise it to make the controller more reluctant to swing the controls, even
+# when a bigger swing would predict a somewhat lower error.
+MOVE_PENALTY_WEIGHTS = {
+    "separator_speed": 5.0,
+    "fresh_feed_setpoint": 5.0,
+}
+
 NOMINAL_FEED_TH = 90.0   # t/h - used during physical warmup and history seeding
 NOMINAL_RPM = 150.0      # matches CementMillSimulator's nominal_rpm
 
@@ -154,6 +165,7 @@ def main():
         weights=TARGET_WEIGHTS,
         error_metric=ERROR_METRIC,
         tie_break_tolerance=TIE_BREAK_TOLERANCE,
+        move_penalty=MOVE_PENALTY_WEIGHTS,
         initial_control=nominal_control,
     )
 

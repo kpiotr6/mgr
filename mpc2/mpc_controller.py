@@ -22,10 +22,14 @@ not a gradient/QP-based MPC):
   4. Score each candidate by the (weighted) mean absolute error - or mean
      absolute percentage error, see `error_metric` - between the predicted
      trajectory and the requested setpoint, summed over targets.
-  5. Among candidates within `tie_break_tolerance` of the best cost, prefer
-     the one closest to the currently-applied control, to avoid chattering
-     between near-equally-good grid points.
-  6. Return the best candidate. Only the *first* control step is meant to be
+  5. Add a move-suppression penalty (`move_penalty`) proportional to how far
+     each candidate is from the currently-applied control, so the optimizer
+     itself is biased against drastic control changes, not just tied
+     candidates - see `_move_penalty`.
+  6. Among candidates within `tie_break_tolerance` of the best (already
+     move-penalized) cost, prefer the one closest to the currently-applied
+     control, to avoid chattering between near-equally-good grid points.
+  7. Return the best candidate. Only the *first* control step is meant to be
      applied (receding horizon) - the caller should call `choose_action`
      again once new measurements come in.
 """
@@ -65,6 +69,15 @@ MAPE_EPS = 1e-6
 # that predict almost identical error.
 DEFAULT_TIE_BREAK_TOLERANCE = 0.01
 TIE_BREAK_ABS_TOL = 1e-3
+
+# Per-control-variable weight (default 0.0 = disabled) applied to a
+# normalized-distance-from-last-control penalty, added directly to each
+# candidate's cost - see `_move_penalty`. Unlike `tie_break_tolerance`
+# (a tie-breaker among already-near-equal candidates), this actually shapes
+# the optimization: a candidate that scores a bit better on error but
+# requires a large control swing can lose to one that scores slightly worse
+# but stays close to the current control.
+DEFAULT_MOVE_PENALTY: dict[str, float] = {}
 
 
 def _resolve_model_class(model_dir_name: str):
@@ -172,6 +185,18 @@ class MPCController:
         `initial_control`) is preferred. This avoids chattering between two
         grid points that are predicted to perform almost identically. Set to
         0 to disable and always take the strict argmin.
+    move_penalty:
+        Optional per-control-variable weight (default 0.0, i.e. disabled,
+        for any variable not listed) that penalizes candidates for how far
+        they are from the currently-applied control (`self.last_control`),
+        normalized by that variable's `control_bounds` range and added
+        directly to the candidate's total cost - e.g. `{"separator_speed":
+        5.0, "fresh_feed_setpoint": 5.0}`. Raise it to make the controller
+        more reluctant to swing the controls, even when a bigger swing would
+        predict a somewhat lower error. This is a genuine cost trade-off
+        (shapes which candidate wins the argmin), unlike `tie_break_tolerance`
+        which only disambiguates among candidates that already score
+        (approximately) the same.
     initial_control:
         Optional control values to seed `self.last_control` with, used only
         for tie-breaking on the very first `choose_action` call (before any
@@ -188,6 +213,7 @@ class MPCController:
         weights: Mapping[str, float] | None = None,
         error_metric: str = DEFAULT_ERROR_METRIC,
         tie_break_tolerance: float = DEFAULT_TIE_BREAK_TOLERANCE,
+        move_penalty: Mapping[str, float] | None = None,
         initial_control: Mapping[str, float] | None = None,
         history_maxlen: int = 200,
     ):
@@ -204,6 +230,7 @@ class MPCController:
         self.weights = {t: float((weights or {}).get(t, 1.0)) for t in model_names}
         self.error_metric = error_metric
         self.tie_break_tolerance = float(tie_break_tolerance)
+        self.move_penalty = {v: float((move_penalty or {}).get(v, 0.0)) for v in self.control_vars}
         self.last_control: dict[str, float] | None = (
             {v: float(initial_control[v]) for v in self.control_vars} if initial_control else None
         )
@@ -347,6 +374,20 @@ class MPCController:
             return np.mean(abs_err / denom, axis=1) * 100.0
         return np.mean(abs_err, axis=1)
 
+    def _move_penalty(self, candidates: np.ndarray) -> np.ndarray:
+        """Per-candidate cost penalty for deviating from `self.last_control`,
+        weighted by `self.move_penalty` and normalized by each control
+        variable's range. Zero (no penalty) if there's no `last_control` yet
+        (first-ever call) or every weight is 0."""
+        if self.last_control is None or not any(self.move_penalty.values()):
+            return np.zeros(len(candidates))
+
+        ranges = np.array([self.control_bounds[v][1] - self.control_bounds[v][0] for v in self.control_vars])
+        last = np.array([self.last_control.get(v, 0.0) for v in self.control_vars])
+        weights = np.array([self.move_penalty[v] for v in self.control_vars])
+        normalized_dist = np.abs(candidates - last) / ranges
+        return np.sum(normalized_dist * weights, axis=1)
+
     def _break_ties(self, total_cost: np.ndarray, candidates: np.ndarray, best_idx: int) -> int:
         """Among candidates within `self.tie_break_tolerance` (relative) of
         the best cost, return the index closest to `self.last_control`
@@ -366,7 +407,9 @@ class MPCController:
     def choose_action(self, setpoints: Mapping[str, float]) -> dict:
         """Evaluate every discretized control combination and return the one
         minimizing the (weighted) sum of per-target error against
-        `setpoints`, using `self.error_metric` ("mae" or "mape").
+        `setpoints`, using `self.error_metric` ("mae" or "mape"), plus
+        `self.move_penalty` (a cost added for deviating from the
+        currently-applied control - see `_move_penalty`).
 
         Only targets present in both `setpoints` and the models this
         controller was built with are optimized against; others are ignored.
@@ -375,7 +418,8 @@ class MPCController:
           - "control": {control_var: value} - apply this control for the next
             step only (receding horizon - call `choose_action` again once new
             measurements arrive via `update_history`).
-          - "cost": the winning candidate's weighted total error.
+          - "cost": the winning candidate's weighted total error, including
+            the move penalty.
           - "predictions": {target: np.ndarray of shape (output_chunk_length,)}
             predicted trajectory for the winning candidate.
           - "error": {target: float} per-target error (in `self.error_metric`
@@ -402,6 +446,8 @@ class MPCController:
             error = self._candidate_errors(preds, setpoints[target])
             errors[target] = error
             total_cost += self.weights.get(target, 1.0) * error
+
+        total_cost += self._move_penalty(candidates)
 
         best_idx = int(np.argmin(total_cost))
 
