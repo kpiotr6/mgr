@@ -52,7 +52,7 @@ from model_training.model_definitions import (
 )
 
 
-input_chunk_lengths = [10]
+input_chunk_lengths = [2,4,6,8,10]
 output_chunk_lengths = [1,2,3]
 
 min_series_length = max(input_chunk_lengths) + max(output_chunk_lengths)
