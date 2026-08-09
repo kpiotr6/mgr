@@ -90,26 +90,26 @@ SIMPLE_MODEL_CONFIG = {
       "separator_speed",
     ],
   },
-  # "first_chamber_filling": {
-  #   "past": [
-  #     "second_chamber_filling",
-  #     "return",
-  #   ],
-  #   "input": [
-  #     "fresh_feed_setpoint",
-  #     "separator_speed",
-  #   ]
-  # },
-  # "second_chamber_filling": {
-  #   "past": [
-  #     "first_chamber_filling",
-  #     "return",
-  #   ],
-  #   "input": [
-  #     "fresh_feed_setpoint",
-  #     "separator_speed",
-  #   ]
-  # },
+  "first_chamber_filling": {
+    "past": [
+      "second_chamber_filling",
+      "return",
+    ],
+    "input": [
+      "fresh_feed_setpoint",
+      "separator_speed",
+    ]
+  },
+  "second_chamber_filling": {
+    "past": [
+      "first_chamber_filling",
+      "return",
+    ],
+    "input": [
+      "fresh_feed_setpoint",
+      "separator_speed",
+    ]
+  },
   # "gran1_blain": {
   #   "past": [
   #     "first_chamber_filling",
