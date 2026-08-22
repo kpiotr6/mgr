@@ -20,10 +20,11 @@ not a gradient/QP-based MPC):
      batched `model.predict(series=[...])` call per target (much faster than
      looping candidate-by-candidate).
   4. Score each candidate by the (weighted) mean absolute error - or mean
-     absolute percentage error, see `error_metric` - between the predicted
-     trajectory and a *reference trajectory* that geometrically approaches
-     the requested setpoint (rather than the flat setpoint itself), summed
-     over targets - see `_reference_trajectory`.
+     absolute percentage error, or time-weighted absolute error (ITAE), see
+     `error_metric` - between the predicted trajectory and a *reference
+     trajectory* that geometrically approaches the requested setpoint
+     (rather than the flat setpoint itself), summed over targets - see
+     `_reference_trajectory`.
   5. Add a move-suppression penalty (`move_penalty`) proportional to how far
      each candidate is from the currently-applied control, so the optimizer
      itself is biased against drastic control changes, not just tied
@@ -78,7 +79,13 @@ DEFAULT_CONTROL_STEP = 10.0
 # "mape": 100 * mean(|pred - setpoint| / |setpoint|) - scale-free, so it stops
 # whichever target happens to have the largest raw magnitude (e.g. gran1_blain
 # in the thousands) from dominating the combined multi-target cost.
-VALID_ERROR_METRICS = ("mae", "mape")
+# "itae": integral of time-weighted absolute error, i.e. each horizon step's
+# |pred - setpoint| weighted by its elapsed time t_k = k * STEP_MINUTES, so
+# errors that persist towards the end of the horizon cost more than the same
+# error right after the move. See `_time_weights` for the normalization that
+# keeps it on the same scale as "mae" (so `weights` / `move_penalty` /
+# `tie_break_tolerance` do not need to be retuned when switching to it).
+VALID_ERROR_METRICS = ("mae", "mape", "itae")
 DEFAULT_ERROR_METRIC = "mae"
 MAPE_EPS = 1e-6
 
@@ -189,14 +196,25 @@ class MPCController:
         thousands vs. filling % ~ 0-100), so if you optimize several targets
         together with MAE you likely want to rescale them, e.g. weight ~
         1 / typical_setpoint_magnitude - or use `error_metric="mape"`
-        instead, which is scale-free.
+        instead, which is scale-free. `"itae"` is on the same scale as
+        `"mae"`, so the same weights carry over.
     error_metric:
         "mae" (default) scores each candidate by mean absolute error against
         the setpoint, in the target's own units. "mape" scores by mean
         absolute *percentage* error instead (100 * |pred - setpoint| /
         |setpoint|), which puts every target on the same 0-100-ish scale
         regardless of its raw magnitude - useful when optimizing several
-        targets together without hand-tuned `weights`.
+        targets together without hand-tuned `weights`. "itae" is the
+        classic integral of time-weighted absolute error: the same absolute
+        deviations as "mae", but each horizon step k weighted by its
+        elapsed time t_k = k * STEP_MINUTES, so a candidate whose error
+        lingers at the end of the horizon is punished harder than one whose
+        error is only transient. The weights are normalized to average 1
+        (see `_time_weights`), so ITAE stays in the target's own units and
+        on the same numeric scale as "mae" - a constant error over the
+        horizon scores identically under both - which means `weights`,
+        `move_penalty` and `tie_break_tolerance` need no retuning when
+        switching between them.
     tie_break_tolerance:
         Candidates whose total cost is within this fraction of the best
         candidate's cost are considered ties, and among those the one
@@ -402,6 +420,23 @@ class MPCController:
         traj[horizon - 1] = setpoint
         return traj
 
+    @staticmethod
+    def _time_weights(horizon: int) -> np.ndarray:
+        """ITAE time weights for a `horizon`-step prediction: the elapsed
+        time of each step, t_k = k * STEP_MINUTES for k = 1..horizon,
+        rescaled to average 1.
+
+        The rescaling is what keeps ITAE comparable to MAE: with weights
+        summing to `horizon`, `mean(w * |err|)` equals the plain time-
+        weighted average `sum(t_k * |err_k|) / sum(t_k)`, so a constant
+        error over the horizon scores the same under both metrics, and the
+        raw t_k magnitude (which depends on STEP_MINUTES and the horizon
+        length) never leaks into the cost scale. What survives is exactly
+        ITAE's intent: the relative 1:2:...:N emphasis on later steps.
+        """
+        t = STEP_MINUTES * np.arange(1, horizon + 1)
+        return t / t.mean()
+
     def _candidate_errors(self, preds: np.ndarray, reference: np.ndarray) -> np.ndarray:
         """Per-candidate error against the per-step `reference` trajectory
         (shape (out_len,), see `_reference_trajectory`), averaged over the
@@ -410,6 +445,9 @@ class MPCController:
         if self.error_metric == "mape":
             denom = np.maximum(np.abs(reference), MAPE_EPS)
             return np.mean(abs_err / denom[np.newaxis, :], axis=1) * 100.0
+        if self.error_metric == "itae":
+            weights = self._time_weights(abs_err.shape[1])
+            return np.mean(abs_err * weights[np.newaxis, :], axis=1)
         return np.mean(abs_err, axis=1)
 
     def _move_penalty(self, candidates: np.ndarray) -> np.ndarray:
@@ -447,8 +485,8 @@ class MPCController:
         minimizing the (weighted) sum of per-target error against a
         reference trajectory that geometrically approaches `setpoints` from
         each target's current (last measured) value - see
-        `_reference_trajectory` - using `self.error_metric` ("mae" or
-        "mape"), plus `self.move_penalty` (a cost added for deviating from
+        `_reference_trajectory` - using `self.error_metric` ("mae",
+        "mape" or "itae"), plus `self.move_penalty` (a cost added for deviating from
         the currently-applied control - see `_move_penalty`).
 
         Only targets present in both `setpoints` and the models this

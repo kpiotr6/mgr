@@ -68,7 +68,7 @@ Every model consumes:
 
 Group 3 is what makes these forecasters usable for control at all: the future
 covariates are the decision variables. `__init__` validates this invariant
-strictly (`mpc_controller.py:265`) — if any model expects a future covariate
+strictly (`mpc_controller.py:283`) — if any model expects a future covariate
 that is not a declared control variable, construction fails, because the
 controller has no way to plan a value for it.
 
@@ -119,7 +119,7 @@ DEFAULT_CONTROL_BOUNDS = {
 DEFAULT_CONTROL_STEP = 10.0
 ```
 
-`_control_grid` (`mpc_controller.py:320`) builds one axis per control variable
+`_control_grid` (`mpc_controller.py:338`) builds one axis per control variable
 by stepping from `lo` to `hi` in increments of `control_step`, then takes the
 full Cartesian product via `np.meshgrid`:
 
@@ -140,7 +140,7 @@ Two consequences worth stating plainly:
 
 ## 4. Batched prediction over the grid
 
-`_predict_target_over_grid` (`mpc_controller.py:332`) is where nearly all the
+`_predict_target_over_grid` (`mpc_controller.py:350`) is where nearly all the
 compute goes. For one target:
 
 ```python
@@ -192,7 +192,7 @@ without any date arithmetic.
 
 ### 5.1 Reference trajectory instead of a flat setpoint
 
-`_reference_trajectory` (`mpc_controller.py:389`) does not ask the plant to hit
+`_reference_trajectory` (`mpc_controller.py:407`) does not ask the plant to hit
 the setpoint immediately. It builds a per-step reference that **geometrically
 approaches** the setpoint `S` from the current measurement `C`: each step is the
 midpoint between the previous reference value and `S`, with the final horizon
@@ -213,17 +213,35 @@ explicit move penalty is involved.
 horizon, under one of two metrics:
 
 - `"mae"` — `mean(|pred − ref|)`, in the target's own units;
-- `"mape"` — `100 · mean(|pred − ref| / |ref|)`, scale-free.
+- `"mape"` — `100 · mean(|pred − ref| / |ref|)`, scale-free;
+- `"itae"` — `Σ_k t_k · |pred[k] − ref[k]| / Σ_k t_k` with `t_k = k · STEP_MINUTES`,
+  the discrete integral of time-weighted absolute error.
 
-The distinction matters because the targets have wildly different magnitudes:
-`gran1_blain ≈ 5500` versus filling percentages in `0–100`. Under MAE, Blaine
-error dominates the summed cost unless compensated. The runner uses `"mae"` and
-compensates with weights (`gran1_blain: 0.02`); `"mape"` is the alternative that
-needs no hand-tuning.
+The MAE/MAPE distinction matters because the targets have wildly different
+magnitudes: `gran1_blain ≈ 5500` versus filling percentages in `0–100`. Under
+MAE, Blaine error dominates the summed cost unless compensated. The runner uses
+`"mae"` and compensates with weights (`gran1_blain: 0.02`); `"mape"` is the
+alternative that needs no hand-tuning.
+
+ITAE is the orthogonal choice: it keeps MAE's units but stops treating every
+horizon step as equally important. A deviation at step `N` costs `N ×` what the
+same deviation costs at step 1, so the optimizer prefers a candidate that
+*settles* over one that merely looks good on the first step and drifts
+afterwards — the standard argument for ITAE as a tuning criterion. The
+implementation (`_time_weights`, `mpc_controller.py:424`) normalizes the time
+weights to average 1 rather than using raw `t_k`, which leaves only the relative
+`1 : 2 : … : N` emphasis: a constant error across the horizon scores identically
+under `"mae"` and `"itae"`, so `weights`, `move_penalty` and
+`tie_break_tolerance` transfer between the two without retuning.
+
+Note that ITAE interacts with the reference trajectory of §5.1: the reference
+already ramps towards the setpoint and only demands `S` itself at step `N`,
+which is precisely the step ITAE weights most heavily. The two therefore
+reinforce each other — soft early demand, strictly enforced endpoint.
 
 ### 5.3 Move suppression
 
-`_move_penalty` (`mpc_controller.py:415`) penalizes distance from the
+`_move_penalty` (`mpc_controller.py:453`) penalizes distance from the
 currently-applied control, normalized by each variable's bounds range so the
 weights are comparable across variables of different physical scale:
 
@@ -257,7 +275,7 @@ if self.tie_break_tolerance > 0 and self.last_control is not None:
     best_idx = self._break_ties(total_cost, candidates, best_idx)
 ```
 
-`_break_ties` (`mpc_controller.py:429`) collects every candidate within
+`_break_ties` (`mpc_controller.py:467`) collects every candidate within
 
 ```python
 tol = max(abs(total_cost[best_idx]) * self.tie_break_tolerance, TIE_BREAK_ABS_TOL)
@@ -339,7 +357,7 @@ which is what turns an open-loop optimizer into feedback control.
 | `control_step` | Grid resolution vs. compute. Halving it roughly quadruples cost for 2 controls. |
 | `control_bounds` | Hard actuator limits; also the normalizer for both penalty terms. |
 | `weights` | Per-target priority in the summed cost. Under `"mae"`, also the scale equalizer. |
-| `error_metric` | `"mae"` (target units, needs weights) vs. `"mape"` (scale-free). |
+| `error_metric` | `"mae"` (target units, needs weights) vs. `"mape"` (scale-free) vs. `"itae"` (target units, weights late-horizon error more). |
 | `move_penalty` | Reluctance to move the controls. Competes directly with tracking error. |
 | `tie_break_tolerance` | Width of the "equally good" band; `0` disables and takes the strict argmin. |
 | `initial_control` | Seeds `last_control` so the very first call already has a tie-break/penalty reference. |

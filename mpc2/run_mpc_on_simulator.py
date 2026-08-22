@@ -42,10 +42,27 @@ from collections import deque
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+# Figure typography: the closed-loop plot is meant to be readable when it is
+# scaled down to fit a page/slide, so everything is well above matplotlib's
+# 10pt default. Axis labels carry the exact variable names, which are long,
+# hence the separate (smaller) legend size.
+LABEL_FONTSIZE = 17
+TICK_FONTSIZE = 15
+LEGEND_FONTSIZE = 13
+plt.rcParams.update({
+    "font.size": TICK_FONTSIZE,
+    "axes.labelsize": LABEL_FONTSIZE,
+    "axes.titlesize": LABEL_FONTSIZE,
+    "xtick.labelsize": TICK_FONTSIZE,
+    "ytick.labelsize": TICK_FONTSIZE,
+    "legend.fontsize": LEGEND_FONTSIZE,
+})
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -75,6 +92,10 @@ SETPOINTS = {
 # gran1_blain then dominate the combined cost unless you also pass weights).
 # "mape": scale-free (100 * |pred-setpoint|/|setpoint|), so all targets
 # compete on comparable footing without hand-tuned weights.
+# "itae": like "mae", but each horizon step's error is weighted by its
+# elapsed time, so candidates whose error persists to the end of the horizon
+# are punished harder than ones that only overshoot transiently. Same scale
+# as "mae", so TARGET_WEIGHTS below carry over unchanged.
 ERROR_METRIC = "mae"
 
 # Per-target weights applied to each target's error before summing into the
@@ -117,7 +138,7 @@ BLOCK_SIZE = int(round(STEP_MINUTES / FINE_DT_MIN))  # raw 1-min samples pooled 
 # Total simulated minutes to run under active MPC control (one decision per minute).
 # NOTE: at ~1-2s per decision (batched grid search across all target models),
 # 500 minutes takes on the order of 10-15 minutes of wall-clock compute.
-N_CONTROLLED_MINUTES = 100
+N_CONTROLLED_MINUTES = 200
 
 LOG_KEYS = ("return", "first_chamber_filling", "second_chamber_filling",
             "separator_speed", "fresh_feed_setpoint", "gran1_blain")
@@ -157,6 +178,119 @@ def _pooled_history(raw_buffer: deque, n_blocks: int) -> list[dict]:
         chunk = rows[i * BLOCK_SIZE: (i + 1) * BLOCK_SIZE]
         pooled.append({k: float(np.mean([r[k] for r in chunk])) for k in chunk[0]})
     return pooled
+
+
+def _plot_closed_loop(log: dict, seed_end_t: float) -> None:
+    """Render the 6-panel closed-loop figure.
+
+    Each panel is identified by the *exact* variable name used everywhere else
+    (MODEL_NAMES / SETPOINTS / the controller's history columns), so the figure
+    and the code/tables can be cross-read without a translation step. Those
+    names are too long to sit rotated in the y-label at this font size - they
+    overflow the panel height and collide between panels - so the name goes in
+    a left-aligned panel title and the y-label carries only the unit.
+    """
+    fig, axes = plt.subplots(6, 1, figsize=(12, 18), sharex=True)
+    fig.suptitle(
+        "MPC controller closed-loop on CementMillSimulator\n"
+        "(a new control is chosen every simulated minute; models still see "
+        "5-minute mean-pooled history)",
+        fontsize=LABEL_FONTSIZE,
+    )
+
+    target_axes = [
+        ("return", "t/h"),
+        ("first_chamber_filling", "%"),
+        ("second_chamber_filling", "%"),
+        ("gran1_blain", "cm$^2$/g"),
+    ]
+    for i, (ax, (key, unit)) in enumerate(zip(axes[:4], target_axes)):
+        ax.plot(log["t"], log[key], color="tab:blue", lw=1.8)
+        ax.axhline(SETPOINTS[key], color="tab:red", ls="--", lw=1.8, label="setpoint")
+        ax.axvline(seed_end_t, color="gray", ls=":", lw=1.5, label="MPC control starts")
+        ax.set_title(key, loc="left", fontsize=LABEL_FONTSIZE)
+        ax.set_ylabel(unit)
+        ax.grid(alpha=0.3)
+        # Styling is identical across the target panels, so one legend is
+        # enough - four of them just cover data.
+        if i == 0:
+            ax.legend(loc="lower right", fontsize=LEGEND_FONTSIZE)
+
+    control_axes = [
+        ("separator_speed", "rpm", "tab:purple"),
+        ("fresh_feed_setpoint", "t/h", "tab:orange"),
+    ]
+    for ax, (key, unit, color) in zip(axes[4:], control_axes):
+        ax.step(log["t"], log[key], where="post", color=color, lw=1.6)
+        ax.axvline(seed_end_t, color="gray", ls=":", lw=1.5)
+        ax.set_title(key, loc="left", fontsize=LABEL_FONTSIZE)
+        ax.set_ylabel(unit)
+        ax.grid(alpha=0.3)
+    axes[-1].set_xlabel("time (min)")
+
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    out_path = OUTPUT_DIR / "fig_mpc_closed_loop.png"
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved {out_path}")
+
+
+def _closed_loop_iae(log: dict, seed_end_t: float) -> list[dict]:
+    """Closed-loop IAE (integral of absolute error) per target over the whole
+    logged run.
+
+    This is the *outer-loop* performance measure, and is deliberately not the
+    same thing as `MPCController.error_metric`: the controller's metric scores
+    a candidate's predicted N-step horizon at each decision, whereas this
+    integrates the error the plant actually realized against the flat
+    setpoint, across the entire simulated timeline:
+
+        IAE_target = integral |y(t) - setpoint| dt   [target units x minutes]
+
+    Integrated with the trapezoid rule over `log["t"]` (minutes). Reported for
+    two windows: "full" (everything logged, including the nominal-control
+    seeding phase, which is what "whole time" means here) and "controlled"
+    (only t >= seed_end_t, i.e. after MPC took over) - the seeding phase runs
+    open-loop at nominal control, so it charges the controller for error it
+    was never given the chance to correct. `iae_per_minute` divides by the
+    window length, making the two windows (and runs of different length)
+    directly comparable; it is exactly the time-averaged absolute error.
+    """
+    t = np.asarray(log["t"], dtype=float)
+    rows = []
+
+    def _integrate(err: np.ndarray, times: np.ndarray) -> tuple[float, float]:
+        if len(times) < 2:
+            return 0.0, 0.0
+        iae = float(np.trapezoid(err, times))
+        return iae, iae / (times[-1] - times[0])
+
+    controlled = t >= seed_end_t
+    weighted = {"full": 0.0, "controlled": 0.0}
+    for target, setpoint in SETPOINTS.items():
+        abs_err = np.abs(np.asarray(log[target], dtype=float) - setpoint)
+        entry = {"target": target, "setpoint": setpoint}
+        for window, mask in (("full", np.ones_like(t, dtype=bool)), ("controlled", controlled)):
+            iae, per_min = _integrate(abs_err[mask], t[mask])
+            entry[f"iae_{window}"] = iae
+            entry[f"iae_per_minute_{window}"] = per_min
+            weighted[window] += TARGET_WEIGHTS.get(target, 1.0) * iae
+        rows.append(entry)
+
+    # Same weighting the controller uses to combine targets into one cost, so
+    # this single number is comparable across runs that tune the controller.
+    rows.append({
+        "target": "TOTAL_weighted",
+        "setpoint": float("nan"),
+        "iae_full": weighted["full"],
+        "iae_per_minute_full": weighted["full"] / (t[-1] - t[0]) if len(t) > 1 else 0.0,
+        "iae_controlled": weighted["controlled"],
+        "iae_per_minute_controlled": (
+            weighted["controlled"] / (t[controlled][-1] - t[controlled][0])
+            if controlled.sum() > 1 else 0.0
+        ),
+    })
+    return rows
 
 
 def main():
@@ -215,46 +349,17 @@ def main():
                   f"fresh_feed_setpoint={control['fresh_feed_setpoint']:6.1f}  {ERROR_METRIC}: {error_str}")
 
     # ------------------------------------------------------------------
-    fig, axes = plt.subplots(6, 1, figsize=(10, 16), sharex=True)
-    fig.suptitle(
-        "MPC controller closed-loop on CementMillSimulator\n"
-        "(a new control is chosen every simulated minute; models still see "
-        "5-minute mean-pooled history)",
-        fontsize=12,
-    )
+    iae_rows = _closed_loop_iae(log, seed_end_t)
+    iae_path = OUTPUT_DIR / "mpc_closed_loop_iae.csv"
+    pd.DataFrame(iae_rows).to_csv(iae_path, index=False)
+    print(f"\nClosed-loop IAE (error_metric={ERROR_METRIC}, {N_CONTROLLED_MINUTES} controlled minutes):")
+    print(f"  {'target':<24} {'IAE full':>14} {'IAE controlled':>16} {'per-minute (ctrl)':>19}")
+    for r in iae_rows:
+        print(f"  {r['target']:<24} {r['iae_full']:>14.2f} {r['iae_controlled']:>16.2f} "
+              f"{r['iae_per_minute_controlled']:>19.3f}")
+    print(f"Saved {iae_path}")
 
-    target_axes = [
-        ("return", "Return flow $M_R$ (t/h)"),
-        ("first_chamber_filling", "1st chamber filling (%)"),
-        ("second_chamber_filling", "2nd chamber filling (%)"),
-        ("gran1_blain", "Blaine gran1 (cm$^2$/g)"),
-    ]
-    for ax, (key, ylabel) in zip(axes[:4], target_axes):
-        ax.plot(log["t"], log[key], color="tab:blue", lw=1.2, label=key)
-        ax.axhline(SETPOINTS[key], color="tab:red", ls="--", lw=1.3, label="setpoint")
-        ax.axvline(seed_end_t, color="gray", ls=":", lw=1, label="MPC control starts")
-        ax.set_ylabel(ylabel)
-        ax.grid(alpha=0.3)
-        ax.legend(loc="upper right", fontsize=8)
-
-    ax = axes[4]
-    ax.step(log["t"], log["separator_speed"], where="post", color="tab:purple", lw=1.0)
-    ax.axvline(seed_end_t, color="gray", ls=":", lw=1)
-    ax.set_ylabel("Separator speed (rpm)")
-    ax.grid(alpha=0.3)
-
-    ax = axes[5]
-    ax.step(log["t"], log["fresh_feed_setpoint"], where="post", color="tab:orange", lw=1.0)
-    ax.axvline(seed_end_t, color="gray", ls=":", lw=1)
-    ax.set_ylabel("Fresh feed (t/h)")
-    ax.set_xlabel("time (min)")
-    ax.grid(alpha=0.3)
-
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
-    out_path = OUTPUT_DIR / "fig_mpc_closed_loop.png"
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    print(f"Saved {out_path}")
+    _plot_closed_loop(log, seed_end_t)
 
 
 if __name__ == "__main__":

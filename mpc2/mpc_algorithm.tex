@@ -16,9 +16,13 @@
            for all $u \in \mathcal{U}$ \Comment{batched forecast}
     \State $y^{\mathrm{ref}}_t \gets$ trajectory approaching $r_t$ from the current
            measurement (halving the gap each step, $y^{\mathrm{ref}}_t[N] = r_t$)
-    \State $e_t(u) \gets \dfrac{1}{N}\sum_{k=1}^{N}
+    \State $e_t(u) \gets \dfrac{1}{N}\sum_{k=1}^{N} \omega_k
            \big| \hat{y}_t(u)[k] - y^{\mathrm{ref}}_t[k] \big|$
-           \Comment{MAE or MAPE}
+           \Comment{MAE, MAPE or ITAE}
+    \Statex \hskip\algorithmicindent
+           $\omega_k = 1$ (MAE/MAPE) \quad or \quad
+           $\omega_k = \dfrac{k}{\frac{1}{N}\sum_{i=1}^{N} i}
+           = \dfrac{2k}{N+1}$ (ITAE, time-weighted)
     \State $J(u) \gets J(u) + w_t \, e_t(u)$
 \EndFor
 \ForAll{$u \in \mathcal{U}$}
