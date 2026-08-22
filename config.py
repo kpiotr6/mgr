@@ -54,28 +54,28 @@ PER_TARGET_CONFIG = {
       "stone_slag_feedrate"
     ]
   },
-  # "gran1_blain": {
-  #   "past": [
-  #     "deduster_vacuum",
-  #     "gran1_cv",
-  #     "gran1_davg_surf",
-  #     "gran1_dv_50",
-  #     "gran1_vol_gt_100_um",
-  #     "gran1_vol_lt_5_um",
-  #     "gran2_blain",
-  #     "iron_sulfate",
-  #     "mill_output_temp",
-  #     "output_vacuum",
-  #     "separator_power",
-  #     "utility_devices_power"
-  #   ],
-  #   "input": [
-  #     "aspiration_fan_speed",
-  #     "circulation_fan_speed",
-  #     "fresh_feed_setpoint",
-  #     "separator_speed"
-  #   ]
-  # }
+  "gran1_blain": {
+    "past": [
+      "deduster_vacuum",
+      "gran1_cv",
+      "gran1_davg_surf",
+      "gran1_dv_50",
+      "gran1_vol_gt_100_um",
+      "gran1_vol_lt_5_um",
+      "gran2_blain",
+      "iron_sulfate",
+      "mill_output_temp",
+      "output_vacuum",
+      "separator_power",
+      "utility_devices_power"
+    ],
+    "input": [
+      "aspiration_fan_speed",
+      "circulation_fan_speed",
+      "fresh_feed_setpoint",
+      "separator_speed"
+    ]
+  }
 }
 
 # simple

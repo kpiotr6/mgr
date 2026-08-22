@@ -1,0 +1,59 @@
+input_chunk_length: 2
+likelihood: null
+lr_scheduler_cls: null
+lr_scheduler_kwargs: null
+n_future_covs: 2
+n_past_covs: 2
+n_stat_covs: 0
+nf_model_class: !!python/name:neuralforecast.models.nhits.NHITS ''
+nf_model_params:
+  activation: LeakyReLU
+  h: 1
+  input_size: 2
+  mlp_units:
+  - - 1024
+    - 1024
+    - 1024
+  - - 1024
+    - 1024
+    - 1024
+  - - 1024
+    - 1024
+    - 1024
+  n_blocks:
+  - 3
+  - 3
+  - 3
+  n_freq_downsample:
+  - 8
+  - 4
+  - 1
+  n_pool_kernel_size:
+  - 8
+  - 4
+  - 1
+  random_seed: null
+optimizer_cls: !!python/name:torch.optim.adam.Adam ''
+optimizer_kwargs:
+  lr: 0.001
+  weight_decay: 0.0001
+output_chunk_length: 1
+output_chunk_shift: 0
+train_sample_shape:
+- !!python/tuple
+  - 2
+  - 1
+- !!python/tuple
+  - 2
+  - 2
+- !!python/tuple
+  - 2
+  - 2
+- !!python/tuple
+  - 1
+  - 2
+- null
+- !!python/tuple
+  - 1
+  - 1
+use_reversible_instance_norm: false

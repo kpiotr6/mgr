@@ -45,7 +45,6 @@ class CementMillSimulator:
                  z_max=10.0,         # coarsest size (mm)
                  a=2.0, alpha=0.95, beta=0.9,    # breakage-law params (Table II order of magnitude)
                  k_s=0.2,            # hold-up sensitivity of breakage rate (eq. 16)
-                 sep_A=1.0, sep_B=1.2, sep_C=0.15, sep_D=4.0,  # reduced-efficiency curve (eq. 10)
                  z50c_base=0.09,     # base separator cut point (mm) at reference mill flow
                  Mm_ref=90.0,        # reference mill flow rate for cut-point correlation (t/h)
                  p_cutpoint=0.6,     # sensitivity of cut point to mill flow rate
@@ -55,6 +54,8 @@ class CementMillSimulator:
                  compartment_capacity=100.0,   # physical hold-up limit per compartment (t)
                  overflow_gain=6.0,      # strength of the overflow/relief response
                                           # (higher = harder cap, stiffer near the limit)
+                 sep_sharpness=3.0,      # partition-curve exponent m in E = f_min +
+                                          # (f_max-f_min)/(1+z_r^m); higher = sharper cut
                  nominal_rpm=150.0,      # rotor speed at which sep_bias=1 (z50c = z50c_base)
                  speed_cutpoint_exponent=1.5,  # cut point ~ (nominal_rpm/rpm)^exponent
                                                 # (higher speed -> smaller cut point -> finer product)
@@ -72,10 +73,8 @@ class CementMillSimulator:
         self.Nx = n_cells
         self.L = length
         self.dx = length / n_cells
-        self.u = u
         self.D = diff
         self.k_s = k_s
-        self.sep_A, self.sep_B, self.sep_C, self.sep_D = sep_A, sep_B, sep_C, sep_D
         self.z50c_base = z50c_base
         self.Mm_ref = Mm_ref
         self.p_cutpoint = p_cutpoint
@@ -90,8 +89,8 @@ class CementMillSimulator:
         self.nominal_rpm = nominal_rpm
         self.speed_cutpoint_exponent = speed_cutpoint_exponent
         self.speed_sharpness_exponent = speed_sharpness_exponent
-        self.rotor_rpm = nominal_rpm     # current live value; see set_rotor_speed()
-        self.sep_sharpness = 3.0         # base separation-curve sharpness at nominal_rpm
+        self.sep_sharpness = sep_sharpness   # partition exponent m, see separator_efficiency()
+        self._sep_sharpness0 = sep_sharpness  # base value, for the disabled speed coupling
 
         # Geometric size grid, class 0 = coarsest, class N-1 = finest
         R = (z_max / z_min) ** (1.0 / (self.N - 1))
@@ -193,11 +192,6 @@ class CementMillSimulator:
         return b
 
     # ------------------------------------------------------------------
-    def breakage_rate(self, H_local):
-        """s_i(H) = a * z_i^alpha * exp(-k_s * H)   (paper eq. 4 & 16 combined)"""
-        return self.a * (self.z ** self.alpha) * np.exp(-self.k_s * np.clip(H_local, 0, None))
-
-    # ------------------------------------------------------------------
     def set_rotor_speed(self, rpm):
         """Live control for a *dynamic* (rotor-speed-controlled) separator.
         Increasing rotor speed increases the centrifugal force on particles
@@ -216,10 +210,14 @@ class CementMillSimulator:
         classification efficiency at speed), reflected in `speed_sharpness_exponent`.
         """
         rpm = max(rpm, 1.0)
-        self.rotor_rpm = rpm
         ratio = self.nominal_rpm / rpm
         self.sep_bias = ratio ** self.speed_cutpoint_exponent
-        self.sep_sharpness = 3.0 * (rpm / self.nominal_rpm) ** self.speed_sharpness_exponent
+        # Disabled: the speed->sharpness coupling is not supported by the
+        # separator literature, which ties sharpness to classifier *load*
+        # (higher throughput -> less sharp; Altun & Benzer 2014, Fig. 16)
+        # rather than to rotor speed. Re-enable only against a base value,
+        # never the old hardcoded 3.0, or it would clobber sep_sharpness:
+        # self.sep_sharpness = self._sep_sharpness0 * (rpm / self.nominal_rpm) ** self.speed_sharpness_exponent
 
     # ------------------------------------------------------------------
     def separator_cutpoint(self, Mm):
@@ -237,12 +235,32 @@ class CementMillSimulator:
         coarse particles are mostly rejected and recirculated. This is a
         numerically robust stand-in for the paper's eq. (10) reduced-efficiency
         curve (same qualitative S-shape, guaranteed to stay in [f_min, f_max]).
+
+        Uses the *log-logistic* partition form
+
+            E(z_r) = f_min + (f_max - f_min) / (1 + z_r^m)
+
+        i.e. a logistic in log(z_r) rather than in z_r itself. This is the
+        standard shape of a published partition curve (cf. the Plitt /
+        Lynch-Rao / logistic family used for classifiers, and Altun & Benzer,
+        Powder Technology 264 (2014) 1-8, whose measured d50c range of
+        0.03-0.11 mm brackets z50c_base), and it fixes two defects of the
+        plain logistic in z_r used previously:
+
+          * f_max is now *attained* as z_r -> 0, so the fine-end plateau -
+            and hence the separator bypass, 1 - f_max - is exactly what the
+            constant says, instead of drifting with the sharpness;
+          * the curve is symmetric on the log-size axis, which is how
+            separation curves are measured and plotted (paper Figs. 2, 4, 5).
+
+        Evaluated as exp(m*ln z_r) so the same defensive clipping as before
+        keeps very fine / very coarse classes from over- or underflowing.
         """
         z50c = self.separator_cutpoint(Mm)
         zr = self.z / z50c
-        sharpness = self.sep_sharpness   # sharpened by higher rotor speed, see set_rotor_speed()
+        m = self.sep_sharpness        # partition exponent; higher = sharper cut
         f_min, f_max = 0.03, 0.92     # residual coarse escape / fine bypass floors
-        exponent = np.clip(sharpness * (zr - 1.0), -50, 50)
+        exponent = np.clip(m * np.log(np.maximum(zr, 1e-300)), -50, 50)
         E = f_min + (f_max - f_min) / (1.0 + np.exp(exponent))
         return E
 
@@ -271,8 +289,6 @@ class CementMillSimulator:
         Mc_total = Mc_func(t)  # t/min
         Mc_i = Mc_total * self.mC
         Mf_i = Mc_i + Mr_i
-        Mf_total = Mf_i.sum()
-        mF = Mf_i / Mf_total if Mf_total > 1e-9 else self.mC
 
         # vectorized breakage rates: shape (Nx, N). Note: the eq.(16) nonlinearity
         # s_i ~ exp(-k_s*H) uses H as a *linear hold-up density* (t/m, paper's Table

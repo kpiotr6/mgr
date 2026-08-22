@@ -91,6 +91,8 @@ TARGET_WEIGHTS = {
     "gran1_blain": 0.02,
 }
 
+CONTROL_STEPS = 10.0
+
 # Candidates within this fraction of the best cost are treated as ties and
 # broken by proximity to the currently-applied control - see module docstring.
 TIE_BREAK_TOLERANCE = 0.01
@@ -102,8 +104,8 @@ TIE_BREAK_TOLERANCE = 0.01
 # raise it to make the controller more reluctant to swing the controls, even
 # when a bigger swing would predict a somewhat lower error.
 MOVE_PENALTY_WEIGHTS = {
-    "separator_speed": 5.0,
-    "fresh_feed_setpoint": 5.0,
+    "separator_speed": 10.0,
+    "fresh_feed_setpoint": 10.0,
 }
 
 NOMINAL_FEED_TH = 90.0   # t/h - used during physical warmup and history seeding
@@ -162,6 +164,7 @@ def main():
     controller = MPCController(
         MODEL_NAMES,
         darts_logs_dir=PROJECT_ROOT / "darts_logs",
+        control_step=CONTROL_STEPS,
         weights=TARGET_WEIGHTS,
         error_metric=ERROR_METRIC,
         tie_break_tolerance=TIE_BREAK_TOLERANCE,

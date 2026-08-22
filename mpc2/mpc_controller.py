@@ -21,7 +21,9 @@ not a gradient/QP-based MPC):
      looping candidate-by-candidate).
   4. Score each candidate by the (weighted) mean absolute error - or mean
      absolute percentage error, see `error_metric` - between the predicted
-     trajectory and the requested setpoint, summed over targets.
+     trajectory and a *reference trajectory* that geometrically approaches
+     the requested setpoint (rather than the flat setpoint itself), summed
+     over targets - see `_reference_trajectory`.
   5. Add a move-suppression penalty (`move_penalty`) proportional to how far
      each candidate is from the currently-applied control, so the optimizer
      itself is biased against drastic control changes, not just tied
@@ -36,6 +38,7 @@ not a gradient/QP-based MPC):
 
 from __future__ import annotations
 
+import logging
 import pickle
 from collections import deque
 from pathlib import Path
@@ -44,6 +47,23 @@ from typing import Mapping, Sequence
 import numpy as np
 import pandas as pd
 from darts import TimeSeries
+
+# Silence per-predict-call noise: PyTorch Lightning's "GPU/TPU/HPU available"
+# and "LOCAL_RANK" banners (logged at INFO, re-emitted on every model.predict()
+# call in the grid search - see `_predict_target_over_grid`), and Darts'
+# harmless "Dataset output has a different data type..." warning.
+#
+# `pytorch_lightning` and `lightning_fabric` each force their own logger back
+# to INFO (and detach it from the root logger) inside their own __init__.py,
+# so this must run *after* importing them, not before - otherwise their
+# import (triggered lazily by `from darts.models import NeuralForecastModel`
+# in `_resolve_model_class`) clobbers a level set beforehand.
+import lightning_fabric  # noqa: E402
+import pytorch_lightning  # noqa: E402
+
+logging.getLogger("pytorch_lightning").setLevel(logging.WARNING)
+logging.getLogger("lightning_fabric").setLevel(logging.WARNING)
+logging.getLogger("darts").setLevel(logging.ERROR)
 
 # 5 minutes per model step (see model_training/train_models.py: one row == one step).
 STEP_MINUTES = 5.0
@@ -209,7 +229,7 @@ class MPCController:
         model_names: Mapping[str, str],
         darts_logs_dir: str | Path = "darts_logs",
         control_bounds: Mapping[str, tuple[float, float]] | None = None,
-        control_step: float = DEFAULT_CONTROL_STEP,
+        control_step: float = 10.0,
         weights: Mapping[str, float] | None = None,
         error_metric: str = DEFAULT_ERROR_METRIC,
         tie_break_tolerance: float = DEFAULT_TIE_BREAK_TOLERANCE,
@@ -365,13 +385,31 @@ class MPCController:
             out[i] = pred.values(copy=False)[:, target_idx]
         return out
 
-    def _candidate_errors(self, preds: np.ndarray, setpoint: float) -> np.ndarray:
-        """Per-candidate error against `setpoint`, averaged over the
+    @staticmethod
+    def _reference_trajectory(current: float, setpoint: float, horizon: int) -> np.ndarray:
+        """Build the per-step reference used in place of a flat setpoint,
+        geometrically approaching `setpoint` from `current`: each step but
+        the last is the midpoint between the previous reference value (the
+        current measurement, for the first step) and `setpoint`; the final
+        horizon step is `setpoint` itself. E.g. for horizon=3, starting from
+        `current` C towards setpoint S: [ (C+S)/2, (((C+S)/2)+S)/2, S ].
+        """
+        traj = np.empty(horizon)
+        prev = current
+        for i in range(horizon - 1):
+            prev = (prev + setpoint) / 2.0
+            traj[i] = prev
+        traj[horizon - 1] = setpoint
+        return traj
+
+    def _candidate_errors(self, preds: np.ndarray, reference: np.ndarray) -> np.ndarray:
+        """Per-candidate error against the per-step `reference` trajectory
+        (shape (out_len,), see `_reference_trajectory`), averaged over the
         prediction horizon, using `self.error_metric`."""
-        abs_err = np.abs(preds - setpoint)
+        abs_err = np.abs(preds - reference[np.newaxis, :])
         if self.error_metric == "mape":
-            denom = max(abs(setpoint), MAPE_EPS)
-            return np.mean(abs_err / denom, axis=1) * 100.0
+            denom = np.maximum(np.abs(reference), MAPE_EPS)
+            return np.mean(abs_err / denom[np.newaxis, :], axis=1) * 100.0
         return np.mean(abs_err, axis=1)
 
     def _move_penalty(self, candidates: np.ndarray) -> np.ndarray:
@@ -406,10 +444,12 @@ class MPCController:
     # ------------------------------------------------------------------
     def choose_action(self, setpoints: Mapping[str, float]) -> dict:
         """Evaluate every discretized control combination and return the one
-        minimizing the (weighted) sum of per-target error against
-        `setpoints`, using `self.error_metric` ("mae" or "mape"), plus
-        `self.move_penalty` (a cost added for deviating from the
-        currently-applied control - see `_move_penalty`).
+        minimizing the (weighted) sum of per-target error against a
+        reference trajectory that geometrically approaches `setpoints` from
+        each target's current (last measured) value - see
+        `_reference_trajectory` - using `self.error_metric` ("mae" or
+        "mape"), plus `self.move_penalty` (a cost added for deviating from
+        the currently-applied control - see `_move_penalty`).
 
         Only targets present in both `setpoints` and the models this
         controller was built with are optimized against; others are ignored.
@@ -443,7 +483,9 @@ class MPCController:
         for target in targets:
             preds = self._predict_target_over_grid(target, hist_df, candidates)
             predictions[target] = preds
-            error = self._candidate_errors(preds, setpoints[target])
+            current = float(hist_df[target].iloc[-1])
+            reference = self._reference_trajectory(current, setpoints[target], preds.shape[1])
+            error = self._candidate_errors(preds, reference)
             errors[target] = error
             total_cost += self.weights.get(target, 1.0) * error
 
