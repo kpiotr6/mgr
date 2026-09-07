@@ -240,10 +240,11 @@ def build_charts(
         column, centre, colour_map = "Skill", 0.0, BETTER_HIGH_CMAP
     metric_label = "MASE" if metric == "mase" else "MAE skill"
 
-    for target, target_frame in metrics.groupby("Target", sort=True):
-        # One colour scale per target, so its three horizons stay comparable.
-        limits = colour_limits(target_frame[column].to_numpy(dtype=np.float64), centre, vlim_mode)
+    # One colour scale for every chart, so targets as well as horizons stay
+    # directly comparable -- the same colour means the same value everywhere.
+    limits = colour_limits(metrics[column].to_numpy(dtype=np.float64), centre, vlim_mode)
 
+    for target, target_frame in metrics.groupby("Target", sort=True):
         for output_length, cell_frame in target_frame.groupby("OutputChunkLength", sort=True):
             pivot = cell_frame.pivot_table(
                 index="Model", columns="InputChunkLength", values=column, aggfunc="mean"

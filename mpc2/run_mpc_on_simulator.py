@@ -31,6 +31,13 @@ between near-equally-good grid points every step (chattering), that
 its job: it prefers whichever near-optimal candidate is closest to the
 control already applied.
 
+Outputs (all written next to this script):
+  - mpc_state_per_minute.csv - the state at *every* simulated minute: targets,
+    setpoints and errors, applied controls, the simulator's raw physical
+    outputs, and the MPC decision cost/predicted errors for that minute.
+  - mpc_closed_loop_iae.csv  - per-target closed-loop IAE summary.
+  - fig_mpc_closed_loop.png  - the 6-panel trajectory figure.
+
 Usage:
     .venv/bin/python -m mpc2.run_mpc_on_simulator
 """
@@ -155,7 +162,10 @@ def _map_outputs_to_targets(out: dict, H_cap: float) -> dict:
 
 def _advance_one_minute(sim, state, t_now, control):
     """Advance the simulator by exactly one minute under `control`, returning
-    the new state/time and the raw (1-minute resolution) measurement row."""
+    the new state/time, the raw (1-minute resolution) measurement row, and the
+    simulator's own instantaneous outputs (kept separate from `row` because
+    `row` is what gets mean-pooled into the controller's history, and must
+    hold exactly the model/control columns and nothing else)."""
     sim.set_rotor_speed(control["separator_speed"])
     Mc0 = control["fresh_feed_setpoint"] / 60.0  # t/h -> t/min
 
@@ -165,7 +175,7 @@ def _advance_one_minute(sim, state, t_now, control):
     row = _map_outputs_to_targets(out, sim.H_cap)
     row["separator_speed"] = control["separator_speed"]
     row["fresh_feed_setpoint"] = control["fresh_feed_setpoint"]
-    return state, t_now, row
+    return state, t_now, row, out
 
 
 def _pooled_history(raw_buffer: deque, n_blocks: int) -> list[dict]:
@@ -316,20 +326,43 @@ def main():
 
     t_now = 0.0
     log = {"t": [], **{k: [] for k in LOG_KEYS}}
+    # One row per simulated minute, written out as a CSV at the end: the full
+    # per-minute state of the run (targets, controls, the simulator's own
+    # physical outputs, and - once MPC takes over - the decision that produced
+    # that minute's control). `log` above stays the plotting-only subset.
+    state_rows: list[dict] = []
 
-    def _record(t, row):
+    def _record(t, row, out, phase, result=None):
         log["t"].append(t)
         for k in LOG_KEYS:
             log[k].append(row[k])
+
+        rec = {"minute": int(round(t / FINE_DT_MIN)), "t_min": float(t), "phase": phase}
+        rec.update({k: float(row[k]) for k in LOG_KEYS})
+        for target, setpoint in SETPOINTS.items():
+            rec[f"{target}_setpoint"] = setpoint
+            rec[f"{target}_error"] = float(row[target]) - setpoint
+        # Raw simulator outputs (Mm, Mp, Mr, blaine, H1, H2, H, ...) under a
+        # "sim_" prefix so they cannot collide with the target names above,
+        # which are a mapped/rescaled view of the same quantities.
+        rec.update({f"sim_{k}": float(v) for k, v in out.items()})
+        rec["mpc_cost"] = float(result["cost"]) if result is not None else float("nan")
+        for target in SETPOINTS:
+            rec[f"mpc_predicted_error_{target}"] = (
+                float(result["error"][target])
+                if result is not None and target in result["error"]
+                else float("nan")
+            )
+        state_rows.append(rec)
 
     raw_window = controller.max_input_chunk_length * BLOCK_SIZE
     raw_buffer: deque = deque(maxlen=raw_window)
 
     print(f"Seeding {raw_window} raw 1-minute step(s) at nominal control...")
     for _ in range(raw_window):
-        state, t_now, row = _advance_one_minute(sim, state, t_now, nominal_control)
+        state, t_now, row, out = _advance_one_minute(sim, state, t_now, nominal_control)
         raw_buffer.append(row)
-        _record(t_now, row)
+        _record(t_now, row, out, phase="seeding")
 
     seed_end_t = t_now
     print(f"Running {N_CONTROLLED_MINUTES} MPC-controlled 1-minute steps...")
@@ -338,9 +371,9 @@ def main():
         result = controller.choose_action(SETPOINTS)
         control = result["control"]
 
-        state, t_now, row = _advance_one_minute(sim, state, t_now, control)
+        state, t_now, row, out = _advance_one_minute(sim, state, t_now, control)
         raw_buffer.append(row)
-        _record(t_now, row)
+        _record(t_now, row, out, phase="controlled", result=result)
 
         if minute % 10 == 0 or minute == N_CONTROLLED_MINUTES - 1:
             error_str = ", ".join(f"{k}={v:.2f}" for k, v in result["error"].items())
@@ -349,6 +382,10 @@ def main():
                   f"fresh_feed_setpoint={control['fresh_feed_setpoint']:6.1f}  {ERROR_METRIC}: {error_str}")
 
     # ------------------------------------------------------------------
+    state_path = OUTPUT_DIR / "mpc_state_per_minute.csv"
+    pd.DataFrame(state_rows).to_csv(state_path, index=False)
+    print(f"\nSaved {state_path} ({len(state_rows)} minute(s) of state)")
+
     iae_rows = _closed_loop_iae(log, seed_end_t)
     iae_path = OUTPUT_DIR / "mpc_closed_loop_iae.csv"
     pd.DataFrame(iae_rows).to_csv(iae_path, index=False)

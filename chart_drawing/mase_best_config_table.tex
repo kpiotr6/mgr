@@ -1,0 +1,23 @@
+\begin{table}[htbp]
+\centering
+\caption{Best achieved MASE for each target and forecasting horizon,
+         with the model and lookback window length attaining it.}
+\label{tab:mase-best-per-target}
+\begin{tabular}{|l|c|c|c|}
+\hline
+Target & 1 step (5 min) & 2 steps (10 min) & 3 steps (15 min) \\
+\hline
+\texttt{gran1\_blain} & 0,580 & 0,675 & 0,671 \\
+ & Linear Regression, $L=6$ & Linear Regression, $L=6$ & Linear Regression, $L=8$ \\
+\hline
+\texttt{return} & 0,778 & 0,767 & 0,760 \\
+ & Linear Regression, $L=2$ & Linear Regression, $L=10$ & Linear Regression, $L=10$ \\
+\hline
+\texttt{second\_chamber\_filling} & 0,836 & 0,846 & 0,857 \\
+ & TSMixer, $L=2$ & TSMixer, $L=2$ & TSMixer, $L=2$ \\
+\hline
+\texttt{first\_chamber\_filling} & 0,958 & 0,910 & 0,946 \\
+ & TSMixer, $L=2$ & N-HiTS, $L=6$ & N-HiTS, $L=2$ \\
+\hline
+\end{tabular}
+\end{table}

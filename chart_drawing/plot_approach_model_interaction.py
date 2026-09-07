@@ -1,8 +1,8 @@
 """Form H -- does the best approach depend on the model?
 
 One panel per target, one line per model, tracked across the approaches that
-target has. The y axis is mean rank by MASE, inverted so the winning end is the
-top of the panel.
+target has. The y axis is mean rank by MASE, so the winning end is the bottom of
+the panel; the count the ranks come from is carried by the title.
 
 Parallel lines would mean the approach choice is separable from the model;
 crossing lines mean it is not. ``gran1_blain`` has no ``all_targets`` run, so its
@@ -54,6 +54,31 @@ def order_models(models: list[str]) -> list[str]:
     return ordered
 
 
+def series_and_offsets(summary, models, approaches):
+    """Mean-rank series per model, plus nudges that keep tied models visible.
+
+    Models that tie on every approach would plot exactly on top of each other,
+    hiding all but the last drawn.
+    """
+    series = {m: [float(summary.loc[(m, a), "MeanRank"]) for a in approaches] for m in models}
+
+    groups: dict[tuple, list[str]] = {}
+    for model, values in series.items():
+        groups.setdefault(tuple(round(v, 6) for v in values), []).append(model)
+    span = max(max(v) for v in series.values()) - min(min(v) for v in series.values())
+    step = (span or 1.0) * 0.009
+    offsets = {}
+    for members in groups.values():
+        for index, model in enumerate(members):
+            offsets[model] = (index - (len(members) - 1)/2) * step
+    return series, offsets
+
+
+def panel_note(panel: dict) -> str:
+    """The reading instructions that ride along with the title."""
+    return f"mean rank of {panel['depth']} · {panel['per']} configs per point"
+
+
 def panel_data(metrics, target):
     long = rank_table(metrics, target)
     if long.empty:
@@ -61,36 +86,26 @@ def panel_data(metrics, target):
     approaches = approaches_for(metrics, target)
     summary = rank_summary(long, ["Model", "Approach"]).set_index(["Model", "Approach"])
     models = order_models(sorted({m for m, _ in summary.index}))
+    series, offsets = series_and_offsets(summary, models, approaches)
     return {
         "target": target,
         "approaches": approaches,
         "summary": summary,
         "models": models,
+        "series": series,
+        "offsets": offsets,
         "depth": len(approaches),
         "per": int(summary.loc[(models[0], approaches[0]), "N"]),
     }
 
 
 def draw_panel(axis, panel, colours, fonts, show_ylabel, show_title):
+    """Draw one target. ``show_title`` only when faceted -- a single panel is
+    titled by the figure, note included."""
     approaches = panel["approaches"]
     positions = np.arange(len(approaches), dtype=float)
 
-    series = {m: [float(panel["summary"].loc[(m, a), "MeanRank"]) for a in approaches]
-              for m in panel["models"]}
-
-    # Models that tie on every approach would plot exactly on top of each other,
-    # hiding all but the last drawn. Nudge such groups apart just enough to see.
-    groups: dict[tuple, list[str]] = {}
-    for model, values in series.items():
-        groups.setdefault(tuple(round(v, 6) for v in values), []).append(model)
-    span = max(max(v) for v in series.values()) - min(min(v) for v in series.values())
-    step = (span or 1.0) * 0.009
-    offsets, overlapped = {}, False
-    for members in groups.values():
-        if len(members) > 1:
-            overlapped = True
-        for index, model in enumerate(members):
-            offsets[model] = (index - (len(members) - 1)/2) * step
+    series, offsets = panel["series"], panel["offsets"]
 
     for model in panel["models"]:
         values = [v + offsets[model] for v in series[model]]
@@ -100,7 +115,6 @@ def draw_panel(axis, panel, colours, fonts, show_ylabel, show_title):
 
     axis.set_xticks(positions, approaches, fontsize=fonts["tick"])
     axis.set_xlim(-0.35, len(approaches) - 0.65)
-    axis.invert_yaxis()                       # rank 1 at the top: the winning end
     axis.yaxis.set_major_formatter(lambda v, _: format_value(v))
     axis.tick_params(axis="y", labelsize=fonts["tick"])
     axis.yaxis.grid(True, color="#e8e8e3", linewidth=1)
@@ -111,19 +125,13 @@ def draw_panel(axis, panel, colours, fonts, show_ylabel, show_title):
     if show_ylabel:
         axis.set_ylabel("mean rank", fontsize=fonts["axis_label"])
 
-    subtitle = f"mean rank of {panel['depth']} · {panel['per']} configs per point"
-    if overlapped:
-        subtitle += " · tied series offset"
     if show_title:
-        # Faceted: each panel names its own target, with the count beneath it.
+        # Faceted: each panel names its own target, with its own note beneath it --
+        # depth and tie handling differ per target, so one shared note would lie.
         axis.set_title(panel["target"], fontsize=fonts["panel"], loc="left",
                        fontweight="bold", pad=38)
-        axis.text(0, 1.012, subtitle, transform=axis.transAxes,
+        axis.text(0, 1.012, panel_note(panel), transform=axis.transAxes,
                   fontsize=fonts["subtitle"], color="#84847b", va="bottom")
-    else:
-        # Single panel: the figure title already names the target.
-        axis.set_title(subtitle, fontsize=fonts["subtitle"], loc="left",
-                       color="#84847b", pad=10)
 
 
 def plot_panels(panels, title, output_paths, fonts, colours):
@@ -135,7 +143,8 @@ def plot_panels(panels, title, output_paths, fonts, colours):
     # Reserve height for the title and however many rows the legend needs.
     legend_cols = min(len(models), 3 if cols == 1 else 4)
     legend_rows = int(np.ceil(len(models) / legend_cols))
-    header = 0.75 + 0.42*legend_rows
+    note = panel_note(panels[0]) if count == 1 else None
+    header = 0.75 + 0.42*legend_rows + (0.34 if note else 0.0)
     fig_h = 5.7*rows + header
     figure, axes = plt.subplots(rows, cols, figsize=(7.0*cols, fig_h), squeeze=False)
 
@@ -150,10 +159,14 @@ def plot_panels(panels, title, output_paths, fonts, colours):
     handles = [Line2D([0], [0], color=colours[m], linewidth=2, marker="o",
                       markersize=7, markeredgecolor="#fcfcfb", markeredgewidth=1.6, label=m)
                for m in models]
+    legend_y = 0.62 + (0.34 if note else 0.0)
     figure.legend(handles=handles, loc="upper center",
-                  bbox_to_anchor=(0.5, 1 - 0.62/fig_h),
+                  bbox_to_anchor=(0.5, 1 - legend_y/fig_h),
                   ncol=legend_cols, frameon=False, fontsize=fonts["legend"])
     figure.suptitle(title, fontsize=fonts["suptitle"], y=1 - 0.12/fig_h, va="top")
+    if note:
+        figure.text(0.5, 1 - 0.60/fig_h, note, ha="center", va="top",
+                    fontsize=fonts["subtitle"], color="#84847b")
     figure.tight_layout(rect=(0, 0, 1, 1 - header/fig_h))
 
     for path in output_paths:
