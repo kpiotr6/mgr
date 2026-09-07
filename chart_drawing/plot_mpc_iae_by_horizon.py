@@ -13,6 +13,11 @@ Lower is better. The forecasting window is an *ordered* category, so the bars
 use a single-hue ordinal ramp (light = shortest window) rather than one colour
 per bar; bar length still carries the value, and the lowest bar is called out.
 
+``mpc_closed_loop_iae_naive.csv`` -- the baseline run where the controller
+forecasts nothing (``run_mpc_on_simulator.py``: ``IS_NAIVE``) -- is read too. It
+is not a forecasting window, so it sits first on every x-axis in a neutral grey
+that stays outside the ordinal ramp.
+
 Targets are named exactly as they are in ``config.py`` / the MPC runner
 (``first_chamber_filling``, never "1st chamber"). ``TOTAL_weighted`` is not a
 target but the runner's weighted sum across them; it gets its own chart so the
@@ -37,8 +42,12 @@ import matplotlib.pyplot as plt
 # One 5-minute row per model step (mpc2/mpc_controller.py: STEP_MINUTES).
 STEP_MINUTES = 5.0
 
-FILE_PATTERN = "mpc_closed_loop_iae_O*.csv"
+FILE_PATTERN = "mpc_closed_loop_iae_*.csv"
 HORIZON_RE = re.compile(r"_O(\d+)\.csv$")
+NAIVE_RE = re.compile(r"_naive\.csv$", re.IGNORECASE)
+
+# The naive baseline is not a forecasting window; 0 only orders it first.
+NAIVE_HORIZON = 0
 
 # Ordinal ramp, one hue, light -> dark with a longer window. Validated as an
 # ordinal ramp (monotone lightness, visible step gaps, light end clears the
@@ -47,6 +56,10 @@ HORIZON_RE = re.compile(r"_O(\d+)\.csv$")
 # would let the shortest window's bar recede into the page; a fourth window
 # would extend the *dark* end instead.
 RAMP = ["#86b6ef", "#3987e5", "#1c5cab", "#0d366b"]
+
+# The baseline is a different kind of thing, not a lighter/darker window, so it
+# gets a neutral grey instead of a ramp step.
+NAIVE_COLOUR = "#9a9a92"
 
 INK = "#16160f"
 INK_MUTED = "#55554e"
@@ -82,11 +95,16 @@ def format_value(value: float) -> str:
 
 
 def horizon_label(steps: int) -> str:
+    if steps == NAIVE_HORIZON:
+        return "naive\nbaseline"
     return f"{steps}\n{steps * STEP_MINUTES:.0f} min"
 
 
 def load_runs(iae_dir: Path) -> pd.DataFrame:
-    """Long frame (target, horizon, <metric columns>) over every O* file found."""
+    """Long frame (target, horizon, <metric columns>) over every run file found.
+
+    ``horizon`` is the O-number, or NAIVE_HORIZON for the baseline run.
+    """
     paths = sorted(iae_dir.glob(FILE_PATTERN))
     if not paths:
         raise SystemExit(f"No {FILE_PATTERN} files found in {iae_dir}")
@@ -94,13 +112,20 @@ def load_runs(iae_dir: Path) -> pd.DataFrame:
     frames = []
     for path in paths:
         match = HORIZON_RE.search(path.name)
-        if not match:
-            print(f"Skipping {path.name}: no _O<n>.csv suffix", file=sys.stderr)
+        if match:
+            horizon = int(match.group(1))
+        elif NAIVE_RE.search(path.name):
+            horizon = NAIVE_HORIZON
+        else:
+            print(f"Skipping {path.name}: no _O<n>.csv or _naive.csv suffix", file=sys.stderr)
             continue
         frame = pd.read_csv(path)
-        frame["horizon"] = int(match.group(1))
+        frame["horizon"] = horizon
         frame["source"] = path.name
         frames.append(frame)
+
+    if not frames:
+        raise SystemExit(f"No usable run files in {iae_dir} (need _O<n>.csv or _naive.csv)")
 
     runs = pd.concat(frames, ignore_index=True).sort_values(["target", "horizon"])
     duplicated = runs.duplicated(["target", "horizon"])
@@ -198,13 +223,13 @@ def build_charts(iae_dir, output_dir, metric, formats, font_scale, combined) -> 
 
     fonts = {role: size * font_scale for role, size in FONT_SIZES.items()}
     horizons = sorted(set(runs["horizon"]))
-    out_of_ramp = [h for h in horizons if not 1 <= h <= len(RAMP)]
+    out_of_ramp = [h for h in horizons if h != NAIVE_HORIZON and not 1 <= h <= len(RAMP)]
     if out_of_ramp:
         raise SystemExit(f"Horizon(s) {out_of_ramp} have no ordinal ramp step "
                          f"(the ramp defines O1..O{len(RAMP)}).")
     # Keyed by the O-number itself, not by position, so O1 is the same blue in
     # every chart no matter which subset of the files is present.
-    colours = {h: RAMP[h - 1] for h in horizons}
+    colours = {h: NAIVE_COLOUR if h == NAIVE_HORIZON else RAMP[h - 1] for h in horizons}
     targets = targets_in(runs)
 
     if combined:

@@ -82,10 +82,10 @@ from mpc2.mpc_controller import MPCController, STEP_MINUTES
 OUTPUT_DIR = SCRIPT_DIR
 
 MODEL_NAMES = {
-    "return": "simple_return_LinearRegression_I6_O3",
-    "first_chamber_filling": "simple_first_chamber_filling_NeuralForecast_TSMixer_I2_O3",
-    "second_chamber_filling": "simple_second_chamber_filling_NeuralForecast_TSMixer_I2_O3",
-    "gran1_blain": "simple_gran1_blain_LinearRegression_I6_O3",
+    "return": "simple_return_LinearRegression_I6_O1",
+    "first_chamber_filling": "simple_first_chamber_filling_NeuralForecast_TSMixer_I2_O1",
+    "second_chamber_filling": "simple_second_chamber_filling_NeuralForecast_TSMixer_I2_O1",
+    "gran1_blain": "simple_gran1_blain_LinearRegression_I6_O1",
 }
 
 SETPOINTS = {
@@ -93,6 +93,17 @@ SETPOINTS = {
     "first_chamber_filling": 50.0,
     "second_chamber_filling": 50.0,
     "gran1_blain": 5500.0,
+}
+
+IS_NAIVE = True
+
+# Toggle for adding small Gaussian noise to target variables after warmup
+ADD_NOISE = False
+NOISE_STD = {
+    "return": 1.0,
+    "first_chamber_filling": 0.5,
+    "second_chamber_filling": 0.5,
+    "gran1_blain": 50.0,
 }
 
 # "mae": each target competes in its own units (raw-scale targets like
@@ -136,8 +147,38 @@ MOVE_PENALTY_WEIGHTS = {
     "fresh_feed_setpoint": 10.0,
 }
 
-NOMINAL_FEED_TH = 90.0   # t/h - used during physical warmup and history seeding
-NOMINAL_RPM = 150.0      # matches CementMillSimulator's nominal_rpm
+# Warm-up / seeding operating point, chosen to start the run nearer the
+# setpoints instead of far below them. It sits on the chamber-filling
+# efficient frontier: fresh feed pinned at its control bound (130 t/h) with
+# rotor speed as the only remaining knob.
+#
+# Steady state here: return=147.5, first/second chamber filling=20.9%/33.6%,
+# gran1_blain=4023 - roughly double the fillings of the old 90 t/h @ 150 rpm
+# start (7.4%/11.9%), at the cost of overshooting the `return` setpoint.
+#
+# Two couplings constrain what is reachable, and neither can be tuned away
+# from here:
+#   * `return` IS the recirculating load, so it rises *with* hold-up. Every
+#     direction that lifts the fillings (more feed, or higher rotor speed ->
+#     finer cut -> more reject) also lifts `return`. There is no operating
+#     point with lower `return` and higher fillings.
+#   * The slower transport in compartment 2 pins H2 at ~1.61x H1, so equal
+#     fillings in the two chambers are off the manifold entirely.
+# Pushing past ~215 rpm here trips the overflow-relief cliff (H runs away to
+# ~190 t); 205 rpm keeps margin - a +5% feed bump or an MPC step to 240 rpm
+# does not flood it. `gran1_blain` is insensitive along this frontier
+# (~3900-4030 throughout), so it costs nothing to trade.
+NOMINAL_FEED_TH = 130.0  # t/h - used during physical warmup and history seeding
+                         # (also the upper `fresh_feed_setpoint` control bound)
+NOMINAL_RPM = 205.0      # rpm - CementMillSimulator's own nominal_rpm is 150,
+                         # which stays the sep_bias=1 reference; this is the
+                         # speed we actually hold during warm-up/seeding.
+
+# Minutes of open-loop warm-up before seeding. The higher hold-up of the
+# operating point above settles more slowly than the old 90 t/h one: at 300
+# min the state is still drifting (return 144.6 -> 147.5), which would leave
+# the seeding rows non-constant. 900 min converges to 3 decimal places.
+WARMUP_MINUTES = 900.0
 
 FINE_DT_MIN = 1.0        # minutes per simulator step - also the MPC decision period now
 BLOCK_SIZE = int(round(STEP_MINUTES / FINE_DT_MIN))  # raw 1-min samples pooled into one model-step row
@@ -160,7 +201,7 @@ def _map_outputs_to_targets(out: dict, H_cap: float) -> dict:
     }
 
 
-def _advance_one_minute(sim, state, t_now, control):
+def _advance_one_minute(sim, state, t_now, control, apply_noise=False):
     """Advance the simulator by exactly one minute under `control`, returning
     the new state/time, the raw (1-minute resolution) measurement row, and the
     simulator's own instantaneous outputs (kept separate from `row` because
@@ -173,6 +214,12 @@ def _advance_one_minute(sim, state, t_now, control):
     t_now += FINE_DT_MIN
     out = sim.instantaneous_outputs(state)
     row = _map_outputs_to_targets(out, sim.H_cap)
+
+    if ADD_NOISE and apply_noise:
+        for k, std in NOISE_STD.items():
+            if k in row:
+                row[k] += np.random.normal(0.0, std)
+
     row["separator_speed"] = control["separator_speed"]
     row["fresh_feed_setpoint"] = control["fresh_feed_setpoint"]
     return state, t_now, row, out
@@ -314,6 +361,7 @@ def main():
         tie_break_tolerance=TIE_BREAK_TOLERANCE,
         move_penalty=MOVE_PENALTY_WEIGHTS,
         initial_control=nominal_control,
+        naive=IS_NAIVE
     )
 
     sim = CementMillSimulator()
@@ -321,7 +369,8 @@ def main():
 
     print("Warming up the simulator to a steady state...")
     Mc_base = NOMINAL_FEED_TH / 60.0
-    warmup = sim.simulate((0, 300.0), lambda t: Mc_base, t_eval=np.linspace(280.0, 300.0, 5))
+    warmup = sim.simulate((0, WARMUP_MINUTES), lambda t: Mc_base,
+                          t_eval=np.linspace(WARMUP_MINUTES - 20.0, WARMUP_MINUTES, 5))
     state = warmup.y[:, -1]
 
     t_now = 0.0
@@ -360,7 +409,8 @@ def main():
 
     print(f"Seeding {raw_window} raw 1-minute step(s) at nominal control...")
     for _ in range(raw_window):
-        state, t_now, row, out = _advance_one_minute(sim, state, t_now, nominal_control)
+        # apply_noise=False during seeding phase
+        state, t_now, row, out = _advance_one_minute(sim, state, t_now, nominal_control, apply_noise=False)
         raw_buffer.append(row)
         _record(t_now, row, out, phase="seeding")
 
@@ -371,7 +421,8 @@ def main():
         result = controller.choose_action(SETPOINTS)
         control = result["control"]
 
-        state, t_now, row, out = _advance_one_minute(sim, state, t_now, control)
+        # apply_noise=True during active control phase
+        state, t_now, row, out = _advance_one_minute(sim, state, t_now, control, apply_noise=True)
         raw_buffer.append(row)
         _record(t_now, row, out, phase="controlled", result=result)
 

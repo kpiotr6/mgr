@@ -240,6 +240,10 @@ class MPCController:
         for tie-breaking on the very first `choose_action` call (before any
         control has actually been applied yet). If omitted, the first call
         has no tie-break reference and falls back to the strict argmin.
+    naive:
+        If True, `choose_action` always returns the same initial control
+        (the `initial_control` if provided, otherwise the first grid point)
+        without running the optimization. Useful for baseline comparisons.
     """
 
     def __init__(
@@ -254,6 +258,7 @@ class MPCController:
         move_penalty: Mapping[str, float] | None = None,
         initial_control: Mapping[str, float] | None = None,
         history_maxlen: int = 200,
+        naive: bool = False,
     ):
         if not model_names:
             raise ValueError("model_names must map at least one target to a model directory name.")
@@ -269,6 +274,7 @@ class MPCController:
         self.error_metric = error_metric
         self.tie_break_tolerance = float(tie_break_tolerance)
         self.move_penalty = {v: float((move_penalty or {}).get(v, 0.0)) for v in self.control_vars}
+        self.naive = bool(naive)
         self.last_control: dict[str, float] | None = (
             {v: float(initial_control[v]) for v in self.control_vars} if initial_control else None
         )
@@ -489,6 +495,10 @@ class MPCController:
         "mape" or "itae"), plus `self.move_penalty` (a cost added for deviating from
         the currently-applied control - see `_move_penalty`).
 
+        If `self.naive` is True, always returns the initial_control (or the
+        first grid point if no initial_control was provided) without running
+        the optimization.
+
         Only targets present in both `setpoints` and the models this
         controller was built with are optimized against; others are ignored.
 
@@ -503,6 +513,21 @@ class MPCController:
           - "error": {target: float} per-target error (in `self.error_metric`
             units) for the winning candidate.
         """
+        if self.naive:
+            if self.last_control is not None:
+                best_control = self.last_control.copy()
+            else:
+                # Return the first grid point (lowest values for all controls)
+                candidates = self._control_grid()
+                best_control = {var: float(candidates[0, j]) for j, var in enumerate(self.control_vars)}
+            self.last_control = best_control
+            return {
+                "control": best_control,
+                "cost": 0.0,
+                "predictions": {},
+                "error": {},
+            }
+
         if not self.has_enough_history():
             raise RuntimeError(
                 f"Need at least {self.max_input_chunk_length} history rows before "
