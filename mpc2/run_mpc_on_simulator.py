@@ -44,8 +44,10 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import sys
 from collections import deque
+from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
@@ -82,10 +84,10 @@ from mpc2.mpc_controller import MPCController, STEP_MINUTES
 OUTPUT_DIR = SCRIPT_DIR
 
 MODEL_NAMES = {
-    "return": "simple_return_LinearRegression_I6_O1",
-    "first_chamber_filling": "simple_first_chamber_filling_NeuralForecast_TSMixer_I2_O1",
-    "second_chamber_filling": "simple_second_chamber_filling_NeuralForecast_TSMixer_I2_O1",
-    "gran1_blain": "simple_gran1_blain_LinearRegression_I6_O1",
+    "return": "simple_return_LinearRegression_I6_O3",
+    "first_chamber_filling": "simple_first_chamber_filling_NeuralForecast_TSMixer_I2_O3",
+    "second_chamber_filling": "simple_second_chamber_filling_NeuralForecast_TSMixer_I2_O3",
+    "gran1_blain": "simple_gran1_blain_LinearRegression_I6_O3",
 }
 
 SETPOINTS = {
@@ -95,7 +97,26 @@ SETPOINTS = {
     "gran1_blain": 5500.0,
 }
 
-IS_NAIVE = True
+IS_NAIVE = False
+
+# Per-target setpoint sweep. When True (or with --per-target on the command
+# line), the script does not do one run against the full SETPOINTS vector.
+# Instead it does *one run per entry in SETPOINTS*: in the run for target T,
+# T keeps its assigned setpoint from SETPOINTS while every other target gets a
+# setpoint equal to its own value at the end of the warm-up/seeding phase -
+# i.e. "hold everything else where the plant already is, and only ask the
+# controller to move T".
+#
+# This isolates each target's closed-loop response: any control action the MPC
+# takes is attributable to T alone, because the other targets start with zero
+# error and are only penalised for drifting away. It also makes the per-target
+# IAE numbers comparable, since every run begins from the identical plant
+# state (the warm-up and seeding phases are executed once and shared).
+#
+# Each run writes its own suffixed outputs, e.g. for target "return":
+#   mpc_state_per_minute_return.csv / mpc_closed_loop_iae_return.csv /
+#   fig_mpc_closed_loop_return.png
+PER_TARGET_RUNS = True
 
 # Toggle for adding small Gaussian noise to target variables after warmup
 ADD_NOISE = False
@@ -237,8 +258,14 @@ def _pooled_history(raw_buffer: deque, n_blocks: int) -> list[dict]:
     return pooled
 
 
-def _plot_closed_loop(log: dict, seed_end_t: float) -> None:
+def _plot_closed_loop(log: dict, seed_end_t: float,
+                      setpoints: Mapping[str, float], suffix: str = "") -> None:
     """Render the 6-panel closed-loop figure.
+
+    `setpoints` is passed in rather than read from the module-level SETPOINTS
+    because the per-target sweep (see PER_TARGET_RUNS) gives each run its own
+    setpoint vector. `suffix` is appended to the output filename so the sweep's
+    runs do not overwrite each other.
 
     Each panel is identified by the *exact* variable name used everywhere else
     (MODEL_NAMES / SETPOINTS / the controller's history columns), so the figure
@@ -263,7 +290,7 @@ def _plot_closed_loop(log: dict, seed_end_t: float) -> None:
     ]
     for i, (ax, (key, unit)) in enumerate(zip(axes[:4], target_axes)):
         ax.plot(log["t"], log[key], color="tab:blue", lw=1.8)
-        ax.axhline(SETPOINTS[key], color="tab:red", ls="--", lw=1.8, label="setpoint")
+        ax.axhline(setpoints[key], color="tab:red", ls="--", lw=1.8, label="setpoint")
         ax.axvline(seed_end_t, color="gray", ls=":", lw=1.5, label="MPC control starts")
         ax.set_title(key, loc="left", fontsize=LABEL_FONTSIZE)
         ax.set_ylabel(unit)
@@ -286,13 +313,14 @@ def _plot_closed_loop(log: dict, seed_end_t: float) -> None:
     axes[-1].set_xlabel("time (min)")
 
     fig.tight_layout(rect=[0, 0, 1, 0.96])
-    out_path = OUTPUT_DIR / "fig_mpc_closed_loop.png"
+    out_path = OUTPUT_DIR / f"fig_mpc_closed_loop{suffix}.png"
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     print(f"Saved {out_path}")
 
 
-def _closed_loop_iae(log: dict, seed_end_t: float) -> list[dict]:
+def _closed_loop_iae(log: dict, seed_end_t: float,
+                     setpoints: Mapping[str, float]) -> list[dict]:
     """Closed-loop IAE (integral of absolute error) per target over the whole
     logged run.
 
@@ -324,7 +352,7 @@ def _closed_loop_iae(log: dict, seed_end_t: float) -> list[dict]:
 
     controlled = t >= seed_end_t
     weighted = {"full": 0.0, "controlled": 0.0}
-    for target, setpoint in SETPOINTS.items():
+    for target, setpoint in setpoints.items():
         abs_err = np.abs(np.asarray(log[target], dtype=float) - setpoint)
         entry = {"target": target, "setpoint": setpoint}
         for window, mask in (("full", np.ones_like(t, dtype=bool)), ("controlled", controlled)):
@@ -350,7 +378,122 @@ def _closed_loop_iae(log: dict, seed_end_t: float) -> list[dict]:
     return rows
 
 
-def main():
+def _run_controlled(controller, sim, state, t_now, seed_history,
+                    seed_log_rows, seed_end_t, setpoints, nominal_control,
+                    suffix="", label=None):
+    """Run the `N_CONTROLLED_MINUTES` closed-loop phase against `setpoints`,
+    starting from an already warmed-up and seeded plant state, and write this
+    run's three output files (suffixed with `suffix`).
+
+    `state` / `seed_history` / `seed_log_rows` are the shared snapshot taken at
+    the end of seeding; the caller is responsible for handing each run its own
+    copies, since a run mutates all three. The controller is reused across runs
+    (loading the darts models is by far the slowest part of startup), so its
+    only cross-run state - `last_control` - is reset here.
+    """
+    if label:
+        print(f"\n=== run: {label} ===")
+        print("  setpoints: " + ", ".join(f"{k}={v:.2f}" for k, v in setpoints.items()))
+
+    controller.last_control = dict(nominal_control)
+    raw_buffer: deque = deque(seed_history, maxlen=controller.max_input_chunk_length * BLOCK_SIZE)
+
+    log = {"t": [], **{k: [] for k in LOG_KEYS}}
+    # One row per simulated minute, written out as a CSV at the end: the full
+    # per-minute state of the run (targets, controls, the simulator's own
+    # physical outputs, and - once MPC takes over - the decision that produced
+    # that minute's control). `log` above stays the plotting-only subset.
+    state_rows: list[dict] = []
+
+    def _record(t, row, out, phase, result=None):
+        log["t"].append(t)
+        for k in LOG_KEYS:
+            log[k].append(row[k])
+
+        rec = {"minute": int(round(t / FINE_DT_MIN)), "t_min": float(t), "phase": phase}
+        rec.update({k: float(row[k]) for k in LOG_KEYS})
+        for target, setpoint in setpoints.items():
+            rec[f"{target}_setpoint"] = setpoint
+            rec[f"{target}_error"] = float(row[target]) - setpoint
+        # Raw simulator outputs (Mm, Mp, Mr, blaine, H1, H2, H, ...) under a
+        # "sim_" prefix so they cannot collide with the target names above,
+        # which are a mapped/rescaled view of the same quantities.
+        rec.update({f"sim_{k}": float(v) for k, v in out.items()})
+        rec["mpc_cost"] = float(result["cost"]) if result is not None else float("nan")
+        for target in setpoints:
+            rec[f"mpc_predicted_error_{target}"] = (
+                float(result["error"][target])
+                if result is not None and target in result["error"]
+                else float("nan")
+            )
+        state_rows.append(rec)
+
+    # Replay the shared seeding phase into this run's log, so the "full" IAE
+    # window and the figure still cover it - it is scored against *this* run's
+    # setpoints even though the plant trajectory through it is identical.
+    for seed_t, seed_row, seed_out in seed_log_rows:
+        _record(seed_t, seed_row, seed_out, phase="seeding")
+
+    print(f"  Running {N_CONTROLLED_MINUTES} MPC-controlled 1-minute steps...")
+    for minute in range(N_CONTROLLED_MINUTES):
+        controller.set_history(_pooled_history(raw_buffer, controller.max_input_chunk_length))
+        result = controller.choose_action(setpoints)
+        control = result["control"]
+
+        # apply_noise=True during active control phase
+        state, t_now, row, out = _advance_one_minute(sim, state, t_now, control, apply_noise=True)
+        raw_buffer.append(row)
+        _record(t_now, row, out, phase="controlled", result=result)
+
+        if minute % 10 == 0 or minute == N_CONTROLLED_MINUTES - 1:
+            error_str = ", ".join(f"{k}={v:.2f}" for k, v in result["error"].items())
+            print(f"    minute {minute:>4}  t={t_now:6.0f} min  "
+                  f"separator_speed={control['separator_speed']:6.1f}  "
+                  f"fresh_feed_setpoint={control['fresh_feed_setpoint']:6.1f}  {ERROR_METRIC}: {error_str}")
+
+    # ------------------------------------------------------------------
+    state_path = OUTPUT_DIR / f"mpc_state_per_minute{suffix}.csv"
+    pd.DataFrame(state_rows).to_csv(state_path, index=False)
+    print(f"\n  Saved {state_path} ({len(state_rows)} minute(s) of state)")
+
+    iae_rows = _closed_loop_iae(log, seed_end_t, setpoints)
+    iae_path = OUTPUT_DIR / f"mpc_closed_loop_iae{suffix}.csv"
+    pd.DataFrame(iae_rows).to_csv(iae_path, index=False)
+    print(f"  Closed-loop IAE (error_metric={ERROR_METRIC}, {N_CONTROLLED_MINUTES} controlled minutes):")
+    print(f"    {'target':<24} {'IAE full':>14} {'IAE controlled':>16} {'per-minute (ctrl)':>19}")
+    for r in iae_rows:
+        print(f"    {r['target']:<24} {r['iae_full']:>14.2f} {r['iae_controlled']:>16.2f} "
+              f"{r['iae_per_minute_controlled']:>19.3f}")
+    print(f"  Saved {iae_path}")
+
+    _plot_closed_loop(log, seed_end_t, setpoints, suffix)
+    return iae_rows
+
+
+def _build_setpoint_plans(per_target: bool, held: Mapping[str, float]):
+    """Return the list of (label, setpoints, suffix) runs to execute.
+
+    With `per_target` off this is a single run against SETPOINTS as written.
+    With it on there is one run per SETPOINTS entry: that entry keeps its
+    assigned setpoint, every other target is pinned to `held` - its own value
+    at the end of the warm-up/seeding phase - so only the one target starts
+    with a non-zero error. See the PER_TARGET_RUNS comment above.
+    """
+    if not per_target:
+        return [(None, dict(SETPOINTS), "")]
+
+    plans = []
+    for target in SETPOINTS:
+        setpoints = {
+            t: (float(SETPOINTS[t]) if t == target else float(held[t]))
+            for t in SETPOINTS
+        }
+        plans.append((f"{target} @ {SETPOINTS[target]:g} (others held at warm-up value)",
+                      setpoints, f"_{target}"))
+    return plans
+
+
+def main(per_target: bool = PER_TARGET_RUNS):
     nominal_control = {"separator_speed": NOMINAL_RPM, "fresh_feed_setpoint": NOMINAL_FEED_TH}
     controller = MPCController(
         MODEL_NAMES,
@@ -372,83 +515,61 @@ def main():
     warmup = sim.simulate((0, WARMUP_MINUTES), lambda t: Mc_base,
                           t_eval=np.linspace(WARMUP_MINUTES - 20.0, WARMUP_MINUTES, 5))
     state = warmup.y[:, -1]
-
     t_now = 0.0
-    log = {"t": [], **{k: [] for k in LOG_KEYS}}
-    # One row per simulated minute, written out as a CSV at the end: the full
-    # per-minute state of the run (targets, controls, the simulator's own
-    # physical outputs, and - once MPC takes over - the decision that produced
-    # that minute's control). `log` above stays the plotting-only subset.
-    state_rows: list[dict] = []
 
-    def _record(t, row, out, phase, result=None):
-        log["t"].append(t)
-        for k in LOG_KEYS:
-            log[k].append(row[k])
-
-        rec = {"minute": int(round(t / FINE_DT_MIN)), "t_min": float(t), "phase": phase}
-        rec.update({k: float(row[k]) for k in LOG_KEYS})
-        for target, setpoint in SETPOINTS.items():
-            rec[f"{target}_setpoint"] = setpoint
-            rec[f"{target}_error"] = float(row[target]) - setpoint
-        # Raw simulator outputs (Mm, Mp, Mr, blaine, H1, H2, H, ...) under a
-        # "sim_" prefix so they cannot collide with the target names above,
-        # which are a mapped/rescaled view of the same quantities.
-        rec.update({f"sim_{k}": float(v) for k, v in out.items()})
-        rec["mpc_cost"] = float(result["cost"]) if result is not None else float("nan")
-        for target in SETPOINTS:
-            rec[f"mpc_predicted_error_{target}"] = (
-                float(result["error"][target])
-                if result is not None and target in result["error"]
-                else float("nan")
-            )
-        state_rows.append(rec)
-
+    # Warm-up and seeding are setpoint-independent (they run open-loop at
+    # `nominal_control`), so they are executed once and every run below starts
+    # from this identical snapshot. That is what makes the per-target runs
+    # comparable to each other.
     raw_window = controller.max_input_chunk_length * BLOCK_SIZE
-    raw_buffer: deque = deque(maxlen=raw_window)
+    seed_history: list[dict] = []
+    seed_log_rows: list[tuple] = []
 
     print(f"Seeding {raw_window} raw 1-minute step(s) at nominal control...")
     for _ in range(raw_window):
         # apply_noise=False during seeding phase
         state, t_now, row, out = _advance_one_minute(sim, state, t_now, nominal_control, apply_noise=False)
-        raw_buffer.append(row)
-        _record(t_now, row, out, phase="seeding")
-
+        seed_history.append(row)
+        seed_log_rows.append((t_now, row, out))
     seed_end_t = t_now
-    print(f"Running {N_CONTROLLED_MINUTES} MPC-controlled 1-minute steps...")
-    for minute in range(N_CONTROLLED_MINUTES):
-        controller.set_history(_pooled_history(raw_buffer, controller.max_input_chunk_length))
-        result = controller.choose_action(SETPOINTS)
-        control = result["control"]
 
-        # apply_noise=True during active control phase
-        state, t_now, row, out = _advance_one_minute(sim, state, t_now, control, apply_noise=True)
-        raw_buffer.append(row)
-        _record(t_now, row, out, phase="controlled", result=result)
+    # The plant's own value for each target at the moment MPC takes over. In a
+    # per-target run this is the setpoint handed to every target except the one
+    # under test, so those start at exactly zero error.
+    held = {t: float(seed_history[-1][t]) for t in SETPOINTS}
+    print("Values at end of warm-up/seeding: "
+          + ", ".join(f"{k}={v:.2f}" for k, v in held.items()))
 
-        if minute % 10 == 0 or minute == N_CONTROLLED_MINUTES - 1:
-            error_str = ", ".join(f"{k}={v:.2f}" for k, v in result["error"].items())
-            print(f"  minute {minute:>4}  t={t_now:6.0f} min  "
-                  f"separator_speed={control['separator_speed']:6.1f}  "
-                  f"fresh_feed_setpoint={control['fresh_feed_setpoint']:6.1f}  {ERROR_METRIC}: {error_str}")
+    plans = _build_setpoint_plans(per_target, held)
+    if per_target:
+        print(f"\nPER-TARGET SWEEP: {len(plans)} run(s), one per SETPOINTS entry.")
 
-    # ------------------------------------------------------------------
-    state_path = OUTPUT_DIR / "mpc_state_per_minute.csv"
-    pd.DataFrame(state_rows).to_csv(state_path, index=False)
-    print(f"\nSaved {state_path} ({len(state_rows)} minute(s) of state)")
+    for label, setpoints, suffix in plans:
+        _run_controlled(
+            controller, sim, state.copy(), t_now,
+            seed_history, seed_log_rows, seed_end_t,
+            setpoints, nominal_control, suffix=suffix, label=label,
+        )
 
-    iae_rows = _closed_loop_iae(log, seed_end_t)
-    iae_path = OUTPUT_DIR / "mpc_closed_loop_iae.csv"
-    pd.DataFrame(iae_rows).to_csv(iae_path, index=False)
-    print(f"\nClosed-loop IAE (error_metric={ERROR_METRIC}, {N_CONTROLLED_MINUTES} controlled minutes):")
-    print(f"  {'target':<24} {'IAE full':>14} {'IAE controlled':>16} {'per-minute (ctrl)':>19}")
-    for r in iae_rows:
-        print(f"  {r['target']:<24} {r['iae_full']:>14.2f} {r['iae_controlled']:>16.2f} "
-              f"{r['iae_per_minute_controlled']:>19.3f}")
-    print(f"Saved {iae_path}")
 
-    _plot_closed_loop(log, seed_end_t)
+def _parse_args(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--per-target", dest="per_target", action="store_true", default=None,
+        help="Run once per SETPOINTS entry: that target keeps its assigned setpoint "
+             "while every other target is pinned to its own value at the end of "
+             "warm-up/seeding. Outputs are suffixed with the target name.",
+    )
+    group.add_argument(
+        "--single", dest="per_target", action="store_false",
+        help="Do one run against the full SETPOINTS vector (the default).",
+    )
+    args = parser.parse_args(argv)
+    if args.per_target is None:
+        args.per_target = PER_TARGET_RUNS
+    return args
 
 
 if __name__ == "__main__":
-    main()
+    main(per_target=_parse_args().per_target)
