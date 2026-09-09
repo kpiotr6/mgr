@@ -7,7 +7,7 @@ import argparse
 features_to_plot = [
     "return",
     "separator_speed",
-    # "gran1_blain",
+    "gran1_blain",
 ]
 
 # Add features you want highlighted in bold here

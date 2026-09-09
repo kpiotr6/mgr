@@ -101,15 +101,6 @@ class CementMillSimulator:
         # (probability that debris from class j lands at class <= i)
         self.b = self._breakage_matrix()
 
-        # --- per-compartment asymmetry ---
-        # The paper's two compartments behave differently (Table I/II: e.g.
-        # a~1.16 in compartment 1 vs a~0.56 in compartment 2; crash-test
-        # velocities u1=1.35, u2=0.82 m/min). Compartment 1 (coarse grinding,
-        # larger balls) breaks material faster and transports it faster;
-        # compartment 2 (fine grinding) is slower on both counts. The
-        # multipliers below are chosen to preserve the same *average* a and u
-        # used previously (so existing calibration/tuning still holds) while
-        # introducing a realistic split between H1 and H2.
         split = compartment_split if compartment_split is not None else n_cells // 2
         self.compartment_split = split
         a_cell = np.empty(self.Nx)

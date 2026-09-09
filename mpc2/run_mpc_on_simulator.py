@@ -168,37 +168,13 @@ MOVE_PENALTY_WEIGHTS = {
     "fresh_feed_setpoint": 10.0,
 }
 
-# Warm-up / seeding operating point, chosen to start the run nearer the
-# setpoints instead of far below them. It sits on the chamber-filling
-# efficient frontier: fresh feed pinned at its control bound (130 t/h) with
-# rotor speed as the only remaining knob.
-#
-# Steady state here: return=147.5, first/second chamber filling=20.9%/33.6%,
-# gran1_blain=4023 - roughly double the fillings of the old 90 t/h @ 150 rpm
-# start (7.4%/11.9%), at the cost of overshooting the `return` setpoint.
-#
-# Two couplings constrain what is reachable, and neither can be tuned away
-# from here:
-#   * `return` IS the recirculating load, so it rises *with* hold-up. Every
-#     direction that lifts the fillings (more feed, or higher rotor speed ->
-#     finer cut -> more reject) also lifts `return`. There is no operating
-#     point with lower `return` and higher fillings.
-#   * The slower transport in compartment 2 pins H2 at ~1.61x H1, so equal
-#     fillings in the two chambers are off the manifold entirely.
-# Pushing past ~215 rpm here trips the overflow-relief cliff (H runs away to
-# ~190 t); 205 rpm keeps margin - a +5% feed bump or an MPC step to 240 rpm
-# does not flood it. `gran1_blain` is insensitive along this frontier
-# (~3900-4030 throughout), so it costs nothing to trade.
+
 NOMINAL_FEED_TH = 130.0  # t/h - used during physical warmup and history seeding
                          # (also the upper `fresh_feed_setpoint` control bound)
 NOMINAL_RPM = 205.0      # rpm - CementMillSimulator's own nominal_rpm is 150,
                          # which stays the sep_bias=1 reference; this is the
                          # speed we actually hold during warm-up/seeding.
 
-# Minutes of open-loop warm-up before seeding. The higher hold-up of the
-# operating point above settles more slowly than the old 90 t/h one: at 300
-# min the state is still drifting (return 144.6 -> 147.5), which would leave
-# the seeding rows non-constant. 900 min converges to 3 decimal places.
 WARMUP_MINUTES = 900.0
 
 FINE_DT_MIN = 1.0        # minutes per simulator step - also the MPC decision period now
